@@ -1,0 +1,14 @@
+services:
+  plc-emulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.plc
+
+    container_name: autogo-plc-emulator
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    ports:
+      - "${MODBUS_PORT:-5020}:5020"
