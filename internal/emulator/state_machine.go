@@ -58,7 +58,18 @@ func (e *Emulator) close() {
 	}
 
 	e.operationID++
+	e.operationStarted = time.Now()
+
 	operationID := e.operationID
+
+	if err := e.store.WriteFloat32(
+		plc.RegisterOutOperationTime,
+		0,
+	); err != nil {
+		log.Printf("ошибка сброса времени операции: %v", err)
+	}
+
+	go e.trackOperationTime(operationID)
 
 	e.mu.Unlock()
 
@@ -176,8 +187,49 @@ func (e *Emulator) beginOperation() (uint64, bool) {
 	}
 
 	e.operationID++
+	e.operationStarted = time.Now()
 
-	return e.operationID, true
+	operationID := e.operationID
+
+	if err := e.store.WriteFloat32(
+		plc.RegisterOutOperationTime,
+		0,
+	); err != nil {
+		log.Printf("ошибка сброса времени операции: %v", err)
+	}
+
+	go e.trackOperationTime(operationID)
+
+	return operationID, true
+}
+
+func (e *Emulator) trackOperationTime(operationID uint64) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		e.mu.Lock()
+
+		if operationID != e.operationID {
+			e.mu.Unlock()
+			return
+		}
+
+		elapsed := time.Since(e.operationStarted).Seconds()
+
+		e.mu.Unlock()
+
+		if err := e.store.WriteFloat32(
+			plc.RegisterOutOperationTime,
+			float32(elapsed),
+		); err != nil {
+			log.Printf(
+				"ошибка записи времени операции: %v",
+				err,
+			)
+			return
+		}
+	}
 }
 
 func (e *Emulator) transition(operationID uint64, state plc.State, duration time.Duration) bool {
@@ -220,6 +272,17 @@ func (e *Emulator) finishOperation(
 	if operationID != e.operationID {
 		return
 	}
+
+	elapsed := time.Since(e.operationStarted).Seconds()
+
+	if err := e.store.WriteFloat32(
+		plc.RegisterOutOperationTime,
+		float32(elapsed),
+	); err != nil {
+		log.Printf("ошибка записи времени операции: %v", err)
+	}
+
+	e.operationID++
 
 	if err := e.setState(state); err != nil {
 		log.Printf("ошибка завершения операции: %v", err)

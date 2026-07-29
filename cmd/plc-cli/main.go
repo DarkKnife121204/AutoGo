@@ -160,12 +160,47 @@ func printStatus(client *PLCClient) error {
 		),
 	)
 
+	mode := plc.Mode(
+		plc.DecodeInt32(
+			registers[plc.RegisterOutMode],
+			registers[plc.RegisterOutMode+1],
+		),
+	)
+
+	locked := plc.DecodeInt32(
+		registers[plc.RegisterOutLocked],
+		registers[plc.RegisterOutLocked+1],
+	) != 0
+
+	operationTime := plc.DecodeFloat32(
+		registers[plc.RegisterOutOperationTime],
+		registers[plc.RegisterOutOperationTime+1],
+	)
+
+	waitingTime := plc.DecodeFloat32(
+		registers[plc.RegisterTimeWaiting],
+		registers[plc.RegisterTimeWaiting+1],
+	)
+
+	attempts := registers[plc.RegisterNumAttempts]
+
+	attemptPeriod := plc.DecodeFloat32(
+		registers[plc.RegisterPeriodAttempts],
+		registers[plc.RegisterPeriodAttempts+1],
+	)
+
 	alarm := plc.Alarm(registers[plc.RegisterOutAlarm])
 
-	fmt.Printf("State:        %s (%d)\n", state, state)
-	fmt.Printf("Actual state: %s (%d)\n", actualState, actualState)
-	fmt.Printf("Last command: %s (%d)\n", lastCommand, lastCommand)
-	fmt.Printf("Alarm:        %d\n", alarm)
+	fmt.Printf("Mode:             %s (%d)\n", mode, mode)
+	fmt.Printf("State:            %s (%d)\n", state, state)
+	fmt.Printf("Actual state:     %s (%d)\n", actualState, actualState)
+	fmt.Printf("Last command:     %s (%d)\n", lastCommand, lastCommand)
+	fmt.Printf("Alarm:            %d\n", alarm)
+	fmt.Printf("Locked:           %t\n", locked)
+	fmt.Printf("Operation time:   %.2f s\n", operationTime)
+	fmt.Printf("Waiting time:     %.2f s\n", waitingTime)
+	fmt.Printf("Attempts:         %d\n", attempts)
+	fmt.Printf("Attempt period:   %.2f s\n", attemptPeriod)
 
 	return nil
 }
