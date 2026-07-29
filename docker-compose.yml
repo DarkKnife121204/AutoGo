@@ -12,3 +12,32 @@ services:
 
     ports:
       - "${MODBUS_PORT:-5020}:5020"
+
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5020"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  autogo:
+    build:
+      context: .
+      dockerfile: Dockerfile.autogate
+
+    container_name: autogo
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      MODBUS_SERVER_ADDRESS: plc-emulator:5020
+      AUTOGO_HTTP_ADDRESS: ":5001"
+
+    depends_on:
+      plc-emulator:
+        condition: service_healthy
+
+    ports:
+      - "${AUTOGO_PORT:-5001}:5001"

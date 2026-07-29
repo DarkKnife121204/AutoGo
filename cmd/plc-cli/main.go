@@ -10,37 +10,55 @@ import (
 	"strings"
 	"time"
 
-	modbus "github.com/simonvetter/modbus"
-
-	"AutoGo/internal/plc"
+	"AutoGo/internal/plcclient"
 )
 
 const (
 	defaultAddress = "127.0.0.1:5020"
 	defaultUnitID  = 1
+	defaultTimeout = 3 * time.Second
 )
 
-type PLCClient struct {
-	address string
-	unitID  uint8
-	timeout time.Duration
-	client  *modbus.ModbusClient
-}
-
 func main() {
-	client := &PLCClient{
-		address: getEnv("MODBUS_SERVER_ADDRESS", defaultAddress),
-		unitID:  getUint8("MODBUS_UNIT_ID", defaultUnitID),
-		timeout: 3 * time.Second,
+	address := getEnv(
+		"MODBUS_SERVER_ADDRESS",
+		defaultAddress,
+	)
+
+	unitID := getUint8(
+		"MODBUS_UNIT_ID",
+		defaultUnitID,
+	)
+
+	client, err := plcclient.New(
+		plcclient.Config{
+			Address: address,
+			UnitID:  unitID,
+			Timeout: defaultTimeout,
+		},
+	)
+	if err != nil {
+		log.Fatalf(
+			"не удалось подключиться к PLC: %v",
+			err,
+		)
 	}
 
-	if err := client.connect(); err != nil {
-		log.Fatalf("не удалось подключиться к PLC: %v", err)
-	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			log.Printf(
+				"ошибка закрытия PLC-соединения: %v",
+				err,
+			)
+		}
+	}()
 
 	fmt.Println("AutoGo PLC CLI")
-	fmt.Printf("PLC: %s, Unit ID: %d\n", client.address, client.unitID)
+	fmt.Printf(
+		"PLC: %s, Unit ID: %d\n",
+		address,
+		unitID,
+	)
 	fmt.Println(`Введите "help" для списка команд.`)
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -68,11 +86,17 @@ func main() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("ошибка чтения консоли: %v", err)
+		log.Printf(
+			"ошибка чтения консоли: %v",
+			err,
+		)
 	}
 }
 
-func execute(client *PLCClient, line string) (bool, error) {
+func execute(
+	client *plcclient.Client,
+	line string,
+) (bool, error) {
 	parts := strings.Fields(line)
 	command := strings.ToLower(parts[0])
 	args := parts[1:]
@@ -98,7 +122,10 @@ func execute(client *PLCClient, line string) (bool, error) {
 		return true, nil
 
 	default:
-		return false, fmt.Errorf("неизвестная команда %q", command)
+		return false, fmt.Errorf(
+			"неизвестная команда %q",
+			command,
+		)
 	}
 }
 
@@ -106,14 +133,14 @@ func printHelp() {
 	fmt.Println(`
 Команды:
 
-  	status
-		Показать состояние, последнюю команду и аварию.
+	status
+		Показать текущее состояние PLC.
 
-  	registers
- 		Прочитать все HR0-HR26.
+	registers
+		Прочитать все Holding Registers HR0-HR26.
 
-  	command <name>
-		Отправить команду в HR0-HR1.
+	command <name>
+		Отправить команду PLC.
 
 	Доступные команды:
 		start
@@ -122,267 +149,195 @@ func printHelp() {
 		close
 		stop
 		reset
-		none
 
 	watch
-		Постоянно выводить состояние PLC.
+		Наблюдать за изменением состояния PLC.
 		Для остановки нажмите Ctrl+C.
 
-  	exit
+	exit
 		Закрыть приложение.
 `)
 }
 
-func printStatus(client *PLCClient) error {
-	registers, err := client.readRegisters(0, plc.RegisterCount)
+func printStatus(client *plcclient.Client) error {
+	status, err := client.Status()
 	if err != nil {
 		return err
 	}
 
-	state := plc.State(
-		plc.DecodeInt32(
-			registers[plc.RegisterOutState],
-			registers[plc.RegisterOutState+1],
-		),
+	fmt.Printf(
+		"Mode:             %s (%d)\n",
+		status.Mode,
+		status.Mode,
 	)
 
-	actualState := plc.State(
-		plc.DecodeInt32(
-			registers[plc.RegisterOutStateActual],
-			registers[plc.RegisterOutStateActual+1],
-		),
+	fmt.Printf(
+		"State:            %s (%d)\n",
+		status.State,
+		status.State,
 	)
 
-	lastCommand := plc.Command(
-		plc.DecodeInt32(
-			registers[plc.RegisterOutCommand],
-			registers[plc.RegisterOutCommand+1],
-		),
+	fmt.Printf(
+		"Actual state:     %s (%d)\n",
+		status.ActualState,
+		status.ActualState,
 	)
 
-	mode := plc.Mode(
-		plc.DecodeInt32(
-			registers[plc.RegisterOutMode],
-			registers[plc.RegisterOutMode+1],
-		),
+	fmt.Printf(
+		"Last command:     %s (%d)\n",
+		status.LastCommand,
+		status.LastCommand,
 	)
 
-	locked := plc.DecodeInt32(
-		registers[plc.RegisterOutLocked],
-		registers[plc.RegisterOutLocked+1],
-	) != 0
-
-	operationTime := plc.DecodeFloat32(
-		registers[plc.RegisterOutOperationTime],
-		registers[plc.RegisterOutOperationTime+1],
+	fmt.Printf(
+		"Alarm:            %d\n",
+		status.Alarm,
 	)
 
-	waitingTime := plc.DecodeFloat32(
-		registers[plc.RegisterTimeWaiting],
-		registers[plc.RegisterTimeWaiting+1],
+	fmt.Printf(
+		"Warning:          %d\n",
+		status.Warning,
 	)
 
-	attempts := registers[plc.RegisterNumAttempts]
-
-	attemptPeriod := plc.DecodeFloat32(
-		registers[plc.RegisterPeriodAttempts],
-		registers[plc.RegisterPeriodAttempts+1],
+	fmt.Printf(
+		"Locked:           %t\n",
+		status.Locked,
 	)
 
-	alarm := plc.Alarm(registers[plc.RegisterOutAlarm])
+	fmt.Printf(
+		"Operation time:   %.2f s\n",
+		status.OperationTime,
+	)
 
-	fmt.Printf("Mode:             %s (%d)\n", mode, mode)
-	fmt.Printf("State:            %s (%d)\n", state, state)
-	fmt.Printf("Actual state:     %s (%d)\n", actualState, actualState)
-	fmt.Printf("Last command:     %s (%d)\n", lastCommand, lastCommand)
-	fmt.Printf("Alarm:            %d\n", alarm)
-	fmt.Printf("Locked:           %t\n", locked)
-	fmt.Printf("Operation time:   %.2f s\n", operationTime)
-	fmt.Printf("Waiting time:     %.2f s\n", waitingTime)
-	fmt.Printf("Attempts:         %d\n", attempts)
-	fmt.Printf("Attempt period:   %.2f s\n", attemptPeriod)
+	fmt.Printf(
+		"Waiting time:     %.2f s\n",
+		status.WaitingTime,
+	)
+
+	fmt.Printf(
+		"Attempts:         %d\n",
+		status.Attempts,
+	)
+
+	fmt.Printf(
+		"Attempt period:   %.2f s\n",
+		status.AttemptPeriod,
+	)
 
 	return nil
 }
 
-func printRegisters(client *PLCClient) error {
-	registers, err := client.readRegisters(0, plc.RegisterCount)
+func printRegisters(client *plcclient.Client) error {
+	registers, err := client.Registers()
 	if err != nil {
 		return err
 	}
 
 	for address, value := range registers {
-		fmt.Printf("HR%-2d = %d\n", address, value)
+		fmt.Printf(
+			"HR%-2d = %d\n",
+			address,
+			value,
+		)
 	}
 
 	return nil
 }
 
-func executeCommand(client *PLCClient, args []string) error {
+func executeCommand(
+	client *plcclient.Client,
+	args []string,
+) error {
 	if len(args) != 1 {
-		return errors.New("использование: command <name>")
+		return errors.New(
+			"использование: command <name>",
+		)
 	}
 
-	command, err := parseCommand(args[0])
+	command := strings.ToLower(args[0])
+
+	var err error
+
+	switch command {
+	case "start":
+		err = client.Start()
+
+	case "reverse":
+		err = client.StartReverse()
+
+	case "open":
+		err = client.Open()
+
+	case "close":
+		err = client.CloseBarrier()
+
+	case "stop":
+		err = client.Stop()
+
+	case "reset":
+		err = client.Reset()
+
+	default:
+		return fmt.Errorf(
+			"неизвестная PLC-команда %q",
+			command,
+		)
+	}
+
 	if err != nil {
 		return err
 	}
 
-	registers := plc.EncodeInt32(int32(command))
-
-	if err := client.writeRegisters(
-		plc.RegisterInCommand,
-		registers[:],
-	); err != nil {
-		return err
-	}
-
-	fmt.Printf("Команда отправлена: %s (%d)\n", command, command)
+	fmt.Printf(
+		"Команда отправлена: %s\n",
+		command,
+	)
 
 	return nil
 }
 
-func watchState(client *PLCClient) error {
-	var previousState plc.State = -1
+func watchState(client *plcclient.Client) error {
+	previousState := ""
 
-	fmt.Println("Наблюдение запущено. Для остановки нажмите Ctrl+C.")
+	fmt.Println(
+		"Наблюдение запущено. Для остановки нажмите Ctrl+C.",
+	)
 
 	for {
-		registers, err := client.readRegisters(
-			plc.RegisterOutState,
-			2,
-		)
+		status, err := client.Status()
 		if err != nil {
-			fmt.Printf("Ошибка чтения: %v\n", err)
+			fmt.Printf(
+				"Ошибка чтения: %v\n",
+				err,
+			)
+
 			time.Sleep(time.Second)
 			continue
 		}
 
-		state := plc.State(
-			plc.DecodeInt32(registers[0], registers[1]),
-		)
+		currentState := status.State.String()
 
-		if state != previousState {
+		if currentState != previousState {
 			fmt.Printf(
 				"%s State: %s (%d)\n",
 				time.Now().Format("15:04:05"),
-				state,
-				state,
+				status.State,
+				status.State,
 			)
 
-			previousState = state
+			previousState = currentState
 		}
 
 		time.Sleep(200 * time.Millisecond)
 	}
 }
 
-func (c *PLCClient) readRegisters(
-	address uint16,
-	quantity uint16,
-) ([]uint16, error) {
-	if c.client == nil {
-		return nil, errors.New(
-			"нет подключения к PLC",
-		)
-	}
-
-	return c.client.ReadRegisters(
-		address,
-		quantity,
-		modbus.HOLDING_REGISTER,
-	)
-}
-
-func (c *PLCClient) writeRegisters(
-	address uint16,
-	values []uint16,
-) error {
-	if c.client == nil {
-		return errors.New(
-			"нет подключения к PLC",
-		)
-	}
-
-	return c.client.WriteRegisters(
-		address,
-		values,
-	)
-}
-
-func (c *PLCClient) Close() {
-	if c.client == nil {
-		return
-	}
-
-	if err := c.client.Close(); err != nil {
-		log.Printf(
-			"ошибка закрытия PLC-соединения: %v",
-			err,
-		)
-	}
-}
-
-func (c *PLCClient) connect() error {
-	client, err := modbus.NewClient(
-		&modbus.ClientConfiguration{
-			URL:     "tcp://" + c.address,
-			Timeout: c.timeout,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"создание Modbus-клиента: %w",
-			err,
-		)
-	}
-
-	if err := client.SetUnitId(c.unitID); err != nil {
-		return fmt.Errorf(
-			"установка Unit ID: %w",
-			err,
-		)
-	}
-
-	if err := client.Open(); err != nil {
-		return fmt.Errorf(
-			"подключение к %s: %w",
-			c.address,
-			err,
-		)
-	}
-
-	c.client = client
-
-	return nil
-}
-
-func parseCommand(value string) (plc.Command, error) {
-	switch strings.ToLower(value) {
-	case "none":
-		return plc.CommandNone, nil
-	case "stop":
-		return plc.CommandStop, nil
-	case "start":
-		return plc.CommandStart, nil
-	case "reverse":
-		return plc.CommandStartReverse, nil
-	case "open":
-		return plc.CommandOpen, nil
-	case "close":
-		return plc.CommandClose, nil
-	case "reset":
-		return plc.CommandReset, nil
-	default:
-		return plc.CommandNone, fmt.Errorf(
-			"неизвестная PLC-команда %q",
-			value,
-		)
-	}
-}
-
-func getEnv(name string, defaultValue string) string {
+func getEnv(
+	name string,
+	defaultValue string,
+) string {
 	value := os.Getenv(name)
+
 	if value == "" {
 		return defaultValue
 	}
@@ -390,13 +345,21 @@ func getEnv(name string, defaultValue string) string {
 	return value
 }
 
-func getUint8(name string, defaultValue uint8) uint8 {
+func getUint8(
+	name string,
+	defaultValue uint8,
+) uint8 {
 	value := os.Getenv(name)
+
 	if value == "" {
 		return defaultValue
 	}
 
-	number, err := strconv.ParseUint(value, 10, 8)
+	number, err := strconv.ParseUint(
+		value,
+		10,
+		8,
+	)
 	if err != nil {
 		log.Fatalf(
 			"неверное значение %s=%q: %v",

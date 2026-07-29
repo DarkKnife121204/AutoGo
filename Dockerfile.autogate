@@ -1,0 +1,26 @@
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /autogo \
+    ./cmd/autogo
+
+FROM alpine:3.22
+
+RUN addgroup -S autogo && adduser -S autogo -G autogo
+
+COPY --from=builder /autogo /usr/local/bin/autogo
+
+USER autogo
+
+EXPOSE 5001
+
+ENTRYPOINT ["autogo"]

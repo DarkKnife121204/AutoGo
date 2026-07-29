@@ -50,6 +50,7 @@ func main() {
 
 	server := modbusserver.NewServer(
 		listenAddress,
+		unitID,
 		plcEmulator,
 	)
 
