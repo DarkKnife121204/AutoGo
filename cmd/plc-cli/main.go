@@ -10,8 +10,7 @@ import (
 	"strings"
 	"time"
 
-	modbus "github.com/adibhanna/modbus-go"
-	modbusTypes "github.com/adibhanna/modbus-go/modbus"
+	modbus "github.com/simonvetter/modbus"
 
 	"AutoGo/internal/plc"
 )
@@ -25,7 +24,7 @@ type PLCClient struct {
 	address string
 	unitID  uint8
 	timeout time.Duration
-	client  *modbus.Client
+	client  *modbus.ModbusClient
 }
 
 func main() {
@@ -40,7 +39,7 @@ func main() {
 	}
 	defer client.Close()
 
-	fmt.Printf("AutoGo PLC CLI\n")
+	fmt.Println("AutoGo PLC CLI")
 	fmt.Printf("PLC: %s, Unit ID: %d\n", client.address, client.unitID)
 	fmt.Println(`Введите "help" для списка команд.`)
 
@@ -248,12 +247,15 @@ func (c *PLCClient) readRegisters(
 	quantity uint16,
 ) ([]uint16, error) {
 	if c.client == nil {
-		return nil, errors.New("нет подключения к PLC")
+		return nil, errors.New(
+			"нет подключения к PLC",
+		)
 	}
 
-	return c.client.ReadHoldingRegisters(
-		modbusTypes.Address(address),
-		modbusTypes.Quantity(quantity),
+	return c.client.ReadRegisters(
+		address,
+		quantity,
+		modbus.HOLDING_REGISTER,
 	)
 }
 
@@ -262,23 +264,52 @@ func (c *PLCClient) writeRegisters(
 	values []uint16,
 ) error {
 	if c.client == nil {
-		return errors.New("нет подключения к PLC")
+		return errors.New(
+			"нет подключения к PLC",
+		)
 	}
 
-	return c.client.WriteMultipleRegisters(
-		modbusTypes.Address(address),
+	return c.client.WriteRegisters(
+		address,
 		values,
 	)
 }
 
-func (c *PLCClient) connect() error {
-	client := modbus.NewTCPClient(c.address)
-	client.SetSlaveID(modbusTypes.SlaveID(c.unitID))
-	client.SetTimeout(c.timeout)
-	client.SetAutoReconnect(true)
-	client.SetRetryCount(1)
+func (c *PLCClient) Close() {
+	if c.client == nil {
+		return
+	}
 
-	if err := client.Connect(); err != nil {
+	if err := c.client.Close(); err != nil {
+		log.Printf(
+			"ошибка закрытия PLC-соединения: %v",
+			err,
+		)
+	}
+}
+
+func (c *PLCClient) connect() error {
+	client, err := modbus.NewClient(
+		&modbus.ClientConfiguration{
+			URL:     "tcp://" + c.address,
+			Timeout: c.timeout,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"создание Modbus-клиента: %w",
+			err,
+		)
+	}
+
+	if err := client.SetUnitId(c.unitID); err != nil {
+		return fmt.Errorf(
+			"установка Unit ID: %w",
+			err,
+		)
+	}
+
+	if err := client.Open(); err != nil {
 		return fmt.Errorf(
 			"подключение к %s: %w",
 			c.address,
@@ -289,12 +320,6 @@ func (c *PLCClient) connect() error {
 	c.client = client
 
 	return nil
-}
-
-func (c *PLCClient) Close() {
-	if c.client != nil {
-		c.client.Close()
-	}
 }
 
 func parseCommand(value string) (plc.Command, error) {
