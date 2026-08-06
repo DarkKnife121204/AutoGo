@@ -32,8 +32,9 @@ services:
       - .env
 
     environment:
-      MODBUS_SERVER_ADDRESS: plc-emulator:5020
       AUTOGO_HTTP_ADDRESS: ":5001"
+      AUTOGO_CONFIG_PATH: /app/config/site.yaml
+      PLC_1_ADDRESS: plc-emulator:5020
 
     depends_on:
       plc-emulator:

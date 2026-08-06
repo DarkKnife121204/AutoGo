@@ -42,7 +42,7 @@ func (s *Server) Start() error {
 	server, err := modbus.NewServer(
 		&modbus.ServerConfiguration{
 			URL:        "tcp://" + s.address,
-			Timeout:    30 * time.Second,
+			Timeout:    24 * time.Second,
 			MaxClients: 10,
 		},
 		handler,

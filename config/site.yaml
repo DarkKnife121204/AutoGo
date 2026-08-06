@@ -1,0 +1,37 @@
+version: 1
+
+site:
+  id: site-7
+  name: Площадка №7
+
+controllers:
+  - id: plc-1
+    type: modbus_tcp
+    address: ${PLC_1_ADDRESS}
+    unit_id: 1
+    timeout: 3s
+    enabled: true
+
+devices:
+  - id: barrier-1
+    name: Шлагбаум №1
+    type: barrier
+    controller: plc-1
+    enabled: true
+
+checkpoints:
+  - id: checkpoint-1
+    name: КПП №1
+
+    lanes:
+      - id: lane-1
+        name: Линия №1
+        enabled: true
+
+        devices:
+          - barrier-1
+
+        scenario:
+          type: single_barrier
+          settings:
+            barrier: barrier-1

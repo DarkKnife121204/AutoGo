@@ -37,15 +37,9 @@ func New(config Config) (*Client, error) {
 		return nil, errors.New("таймаут PLC должен быть больше нуля")
 	}
 
-	client := &Client{
+	return &Client{
 		config: config,
-	}
-
-	if err := client.connect(); err != nil {
-		return nil, err
-	}
-
-	return client, nil
+	}, nil
 }
 
 func (c *Client) Close() error {
@@ -70,13 +64,6 @@ func (c *Client) Close() error {
 	}
 
 	return nil
-}
-
-func (c *Client) connect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.connectLocked()
 }
 
 func (c *Client) connectLocked() error {

@@ -9,7 +9,7 @@ import (
 type Status struct {
 	Mode          plc.Mode
 	State         plc.State
-	ActualState   plc.State
+	ActualState   plc.ActualState
 	Alarm         plc.Alarm
 	Warning       uint16
 	Locked        bool
@@ -49,7 +49,7 @@ func (c *Client) Status() (Status, error) {
 			decodeInt32(registers, plc.RegisterOutState),
 		),
 
-		ActualState: plc.State(
+		ActualState: plc.ActualState(
 			decodeInt32(registers, plc.RegisterOutStateActual),
 		),
 

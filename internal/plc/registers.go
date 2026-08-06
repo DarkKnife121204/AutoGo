@@ -13,7 +13,7 @@ const (
 
 	RegisterOutMode        uint16 = 4 // HR4-HR5, Int32, Mode
 	RegisterOutState       uint16 = 6 // HR6-HR7, Int32, State
-	RegisterOutStateActual uint16 = 8 // HR8-HR9, Int32, State
+	RegisterOutStateActual uint16 = 8 // HR8-HR9, Int32, ActualState
 
 	RegisterOutAlarm   uint16 = 10 // HR10, Uint16, Alarm flags
 	RegisterOutWarning uint16 = 11 // HR11, Uint16, Warning flags

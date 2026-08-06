@@ -13,7 +13,10 @@ type Emulator struct {
 	mu               sync.Mutex
 	operationID      uint64
 	operationStarted time.Time
-	state            plc.State
+
+	state       plc.State
+	actualState plc.ActualState
+
 	openDuration     time.Duration
 	transferDuration time.Duration
 	closeDuration    time.Duration
@@ -23,6 +26,7 @@ func New(openDuration time.Duration, transferDuration time.Duration, closeDurati
 	emulator := &Emulator{
 		store:            NewDataStore(),
 		state:            plc.StateInit,
+		actualState:      plc.ActualStateUnknown,
 		openDuration:     openDuration,
 		transferDuration: transferDuration,
 		closeDuration:    closeDuration,
@@ -41,6 +45,10 @@ func (e *Emulator) Store() *DataStore {
 
 func (e *Emulator) initialize() error {
 	if err := e.setState(plc.StateInit); err != nil {
+		return err
+	}
+
+	if err := e.setActualState(plc.ActualStateUnknown); err != nil {
 		return err
 	}
 
