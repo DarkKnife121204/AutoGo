@@ -9,14 +9,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	"AutoGo/internal/checkpoints"
 	"AutoGo/internal/config"
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanes"
 	"AutoGo/internal/plcclient"
+	"AutoGo/internal/scenarios"
 )
 
 const (
@@ -27,6 +30,7 @@ type application struct {
 	controllers map[string]*plcclient.Client
 	barriers    map[string]*devices.Barrier
 	lanes       map[string]*lanes.Lane
+	checkpoints map[string]*checkpoints.Checkpoint
 }
 
 type plcCommandRequest struct {
@@ -61,6 +65,23 @@ type plcStatusResponse struct {
 	WaitingTime   float32 `json:"waiting_time"`
 	Attempts      uint16  `json:"attempts"`
 	AttemptPeriod float32 `json:"attempt_period"`
+}
+
+type laneSummaryResponse struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Scenario string `json:"scenario"`
+}
+
+type checkpointResponse struct {
+	ID    string                `json:"id"`
+	Name  string                `json:"name"`
+	Lanes []laneSummaryResponse `json:"lanes"`
+}
+
+type checkpointListResponse struct {
+	Status      string               `json:"status"`
+	Checkpoints []checkpointResponse `json:"checkpoints"`
 }
 
 func main() {
@@ -139,10 +160,27 @@ func main() {
 		len(siteLanes),
 	)
 
+	siteCheckpoints, err := buildCheckpoints(
+		siteConfig.Checkpoints,
+		siteLanes,
+	)
+	if err != nil {
+		log.Fatalf(
+			"не удалось создать КПП: %v",
+			err,
+		)
+	}
+
+	log.Printf(
+		"КПП созданы: count=%d",
+		len(siteCheckpoints),
+	)
+
 	app := &application{
 		controllers: controllers,
 		barriers:    barriers,
 		lanes:       siteLanes,
+		checkpoints: siteCheckpoints,
 	}
 
 	mux := http.NewServeMux()
@@ -150,6 +188,16 @@ func main() {
 	mux.HandleFunc(
 		"/health",
 		app.health,
+	)
+
+	mux.HandleFunc(
+		"/checkpoints",
+		app.checkpointList,
+	)
+
+	mux.HandleFunc(
+		"/checkpoints/",
+		app.checkpointHandler,
 	)
 
 	mux.HandleFunc(
@@ -443,6 +491,175 @@ func (a *application) laneHandler(
 	}
 }
 
+func (a *application) checkpointList(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		writeJSON(
+			w,
+			http.StatusMethodNotAllowed,
+			map[string]string{
+				"status": "error",
+				"error":  "method not allowed",
+			},
+		)
+
+		return
+	}
+
+	checkpointIDs := make(
+		[]string,
+		0,
+		len(a.checkpoints),
+	)
+
+	for checkpointID := range a.checkpoints {
+		checkpointIDs = append(
+			checkpointIDs,
+			checkpointID,
+		)
+	}
+
+	sort.Strings(checkpointIDs)
+
+	response := checkpointListResponse{
+		Status: "ok",
+		Checkpoints: make(
+			[]checkpointResponse,
+			0,
+			len(checkpointIDs),
+		),
+	}
+
+	for _, checkpointID := range checkpointIDs {
+		response.Checkpoints = append(
+			response.Checkpoints,
+			makeCheckpointResponse(
+				a.checkpoints[checkpointID],
+			),
+		)
+	}
+
+	writeJSON(
+		w,
+		http.StatusOK,
+		response,
+	)
+}
+
+func (a *application) checkpointHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		writeJSON(
+			w,
+			http.StatusMethodNotAllowed,
+			map[string]string{
+				"status": "error",
+				"error":  "method not allowed",
+			},
+		)
+
+		return
+	}
+
+	checkpointID := strings.Trim(
+		strings.TrimPrefix(
+			r.URL.Path,
+			"/checkpoints/",
+		),
+		"/",
+	)
+
+	if checkpointID == "" ||
+		strings.Contains(checkpointID, "/") {
+		writeJSON(
+			w,
+			http.StatusNotFound,
+			map[string]string{
+				"status": "error",
+				"error":  "route not found",
+			},
+		)
+
+		return
+	}
+
+	checkpoint, exists := a.checkpoints[checkpointID]
+	if !exists {
+		writeJSON(
+			w,
+			http.StatusNotFound,
+			map[string]string{
+				"status": "error",
+				"error":  "checkpoint not found",
+			},
+		)
+
+		return
+	}
+
+	writeJSON(
+		w,
+		http.StatusOK,
+		struct {
+			Status     string             `json:"status"`
+			Checkpoint checkpointResponse `json:"checkpoint"`
+		}{
+			Status: "ok",
+			Checkpoint: makeCheckpointResponse(
+				checkpoint,
+			),
+		},
+	)
+}
+
+func makeCheckpointResponse(
+	checkpoint *checkpoints.Checkpoint,
+) checkpointResponse {
+	laneIDs := make(
+		[]string,
+		0,
+		len(checkpoint.Lanes),
+	)
+
+	for laneID := range checkpoint.Lanes {
+		laneIDs = append(
+			laneIDs,
+			laneID,
+		)
+	}
+
+	sort.Strings(laneIDs)
+
+	response := checkpointResponse{
+		ID:   checkpoint.ID,
+		Name: checkpoint.Name,
+		Lanes: make(
+			[]laneSummaryResponse,
+			0,
+			len(laneIDs),
+		),
+	}
+
+	for _, laneID := range laneIDs {
+		lane := checkpoint.Lanes[laneID]
+
+		response.Lanes = append(
+			response.Lanes,
+			laneSummaryResponse{
+				ID:       lane.ID,
+				Name:     lane.Name,
+				Scenario: lane.ScenarioType(),
+			},
+		)
+	}
+
+	return response
+}
+
 func (a *application) barrierHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -504,6 +721,58 @@ func (a *application) barrierHandler(
 			},
 		)
 	}
+}
+
+func buildCheckpoints(
+	configs []config.CheckpointConfig,
+	siteLanes map[string]*lanes.Lane,
+) (map[string]*checkpoints.Checkpoint, error) {
+	result := make(
+		map[string]*checkpoints.Checkpoint,
+		len(configs),
+	)
+
+	for _, checkpointConfig := range configs {
+		checkpointLanes := make(
+			map[string]*lanes.Lane,
+		)
+
+		for _, laneConfig := range checkpointConfig.Lanes {
+			if !laneConfig.Enabled {
+				continue
+			}
+
+			lane, exists := siteLanes[laneConfig.ID]
+			if !exists {
+				return nil, fmt.Errorf(
+					"для КПП %q не найдена линия %q",
+					checkpointConfig.ID,
+					laneConfig.ID,
+				)
+			}
+
+			checkpointLanes[lane.ID] = lane
+		}
+
+		checkpoint, err := checkpoints.New(
+			checkpointConfig.ID,
+			checkpointConfig.Name,
+			checkpointLanes,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		result[checkpoint.ID] = checkpoint
+	}
+
+	if len(result) == 0 {
+		return nil, errors.New(
+			"в конфигурации нет КПП с включёнными линиями",
+		)
+	}
+
+	return result, nil
 }
 
 func buildPLCClients(
@@ -620,7 +889,7 @@ func buildLanes(
 			}
 
 			switch laneConfig.Scenario.Type {
-			case config.ScenarioTypeSingleBarrier:
+			case config.ScenarioTypeSingleBarrierManualRelease:
 				barrierID := laneConfig.Scenario.Settings["barrier"]
 
 				barrier, exists := barriers[barrierID]
@@ -632,11 +901,22 @@ func buildLanes(
 					)
 				}
 
-				lane, err := lanes.NewSingleBarrier(
+				scenario, err := scenarios.NewSingleBarrierManualRelease(
+					barrier,
+				)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"создание сценария линии %q: %w",
+						laneConfig.ID,
+						err,
+					)
+				}
+
+				lane, err := lanes.New(
 					laneConfig.ID,
 					laneConfig.Name,
 					checkpoint.ID,
-					barrier,
+					scenario,
 				)
 				if err != nil {
 					return nil, err

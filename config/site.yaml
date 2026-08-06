@@ -32,6 +32,6 @@ checkpoints:
           - barrier-1
 
         scenario:
-          type: single_barrier
+          type: single_barrier_manual_release
           settings:
             barrier: barrier-1

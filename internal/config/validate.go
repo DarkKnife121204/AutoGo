@@ -15,7 +15,7 @@ const (
 	DeviceTypeCamera       = "camera"
 	DeviceTypeSensor       = "sensor"
 
-	ScenarioTypeSingleBarrier = "single_barrier"
+	ScenarioTypeSingleBarrierManualRelease = "single_barrier_manual_release"
 )
 
 func (c Config) Validate() error {
@@ -388,7 +388,7 @@ func validateScenario(
 	var validationErrors []error
 
 	switch scenario.Type {
-	case ScenarioTypeSingleBarrier:
+	case ScenarioTypeSingleBarrierManualRelease:
 	default:
 		validationErrors = append(
 			validationErrors,

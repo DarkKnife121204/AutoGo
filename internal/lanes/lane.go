@@ -4,33 +4,30 @@ import (
 	"errors"
 	"fmt"
 
-	"AutoGo/internal/devices"
 	"AutoGo/internal/plcclient"
+	"AutoGo/internal/scenarios"
 )
-
-const ScenarioSingleBarrier = "single_barrier"
 
 type Lane struct {
 	ID           string
 	Name         string
 	CheckpointID string
-	ScenarioType string
-	Barrier      *devices.Barrier
+	Scenario     scenarios.Scenario
 }
 
-func NewSingleBarrier(
+func New(
 	id string,
 	name string,
 	checkpointID string,
-	barrier *devices.Barrier,
+	scenario scenarios.Scenario,
 ) (*Lane, error) {
 	if id == "" {
 		return nil, errors.New("ID линии не указан")
 	}
 
-	if barrier == nil {
+	if scenario == nil {
 		return nil, fmt.Errorf(
-			"для линии %q не указан шлагбаум",
+			"для линии %q не указан сценарий",
 			id,
 		)
 	}
@@ -39,35 +36,41 @@ func NewSingleBarrier(
 		ID:           id,
 		Name:         name,
 		CheckpointID: checkpointID,
-		ScenarioType: ScenarioSingleBarrier,
-		Barrier:      barrier,
+		Scenario:     scenario,
 	}, nil
 }
 
+func (l *Lane) ScenarioType() string {
+	return l.Scenario.Type()
+}
+
 func (l *Lane) Start() error {
-	return l.Barrier.Start()
+	return l.Scenario.Start()
 }
 
 func (l *Lane) StartReverse() error {
-	return l.Barrier.StartReverse()
+	return l.Scenario.StartReverse()
 }
 
 func (l *Lane) Stop() error {
-	return l.Barrier.Stop()
+	return l.Scenario.Stop()
 }
 
 func (l *Lane) Open() error {
-	return l.Barrier.Open()
+	return l.Scenario.Open()
 }
 
 func (l *Lane) Close() error {
-	return l.Barrier.Close()
+	return l.Scenario.Close()
 }
 
 func (l *Lane) Reset() error {
-	return l.Barrier.Reset()
+	return l.Scenario.Reset()
 }
 
-func (l *Lane) Status() (plcclient.Status, error) {
-	return l.Barrier.Status()
+func (l *Lane) Status() (
+	plcclient.Status,
+	error,
+) {
+	return l.Scenario.Status()
 }
