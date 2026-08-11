@@ -1,9 +1,18 @@
 package scenarios
 
-import "AutoGo/internal/plcclient"
+import "AutoGo/internal/lanestatus"
+
+type TriggerSource string
+
+const (
+	TriggerSourceAPI    TriggerSource = "api"
+	TriggerSourceCamera TriggerSource = "camera"
+)
 
 type Scenario interface {
 	Type() string
+
+	Trigger(source TriggerSource) error
 
 	Start() error
 	StartReverse() error
@@ -12,5 +21,5 @@ type Scenario interface {
 	Close() error
 	Reset() error
 
-	Status() (plcclient.Status, error)
+	Status() (lanestatus.LaneStatus, error)
 }

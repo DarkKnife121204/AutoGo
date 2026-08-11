@@ -15,7 +15,23 @@ const (
 	DeviceTypeCamera       = "camera"
 	DeviceTypeSensor       = "sensor"
 
-	ScenarioTypeSingleBarrierManualRelease = "single_barrier_manual_release"
+	ScenarioTypeSingleBarrier = "single_barrier"
+	ScenarioTypeDoubleBarrier = "double_barrier"
+
+	ReleaseModeImmediate            = "immediate"
+	ReleaseModeExternalConfirmation = "external_confirmation"
+	ReleaseModeManualOperator       = "manual_operator"
+
+	TriggerOperator = "operator"
+	TriggerCamera   = "camera"
+	TriggerCode     = "code"
+	TriggerCard     = "card"
+
+	DirectionNormal  = "normal"
+	DirectionReverse = "reverse"
+
+	LaneModeAutomatic = "automatic"
+	LaneModeManual    = "manual"
 )
 
 func (c Config) Validate() error {
@@ -316,6 +332,19 @@ func validateLane(
 
 	laneDeviceIDs := make(map[string]struct{})
 
+	switch strings.TrimSpace(lane.Mode) {
+	case "", LaneModeAutomatic, LaneModeManual:
+	default:
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.mode содержит неизвестный режим %q (ожидается automatic или manual)",
+				path,
+				lane.Mode,
+			),
+		)
+	}
+
 	for index, deviceID := range lane.Devices {
 		devicePath := fmt.Sprintf(
 			"%s.devices[%d]",
@@ -388,7 +417,28 @@ func validateScenario(
 	var validationErrors []error
 
 	switch scenario.Type {
-	case ScenarioTypeSingleBarrierManualRelease:
+	case ScenarioTypeSingleBarrier:
+		validationErrors = append(
+			validationErrors,
+			validateSingleBarrierSettings(
+				path,
+				scenario.Settings,
+				laneDeviceIDs,
+			)...,
+		)
+
+	case ScenarioTypeDoubleBarrier:
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.type %q пока не реализован",
+				path,
+				scenario.Type,
+			),
+		)
+
+		return errors.Join(validationErrors...)
+
 	default:
 		validationErrors = append(
 			validationErrors,
@@ -402,9 +452,32 @@ func validateScenario(
 		return errors.Join(validationErrors...)
 	}
 
-	barrierID := strings.TrimSpace(
-		scenario.Settings["barrier"],
+	validationErrors = append(
+		validationErrors,
+		validateReleaseMode(path, scenario.Settings.ReleaseMode)...,
 	)
+
+	validationErrors = append(
+		validationErrors,
+		validateTriggers(path, scenario.Settings.Triggers)...,
+	)
+
+	validationErrors = append(
+		validationErrors,
+		validateDirection(path, scenario.Settings.Direction)...,
+	)
+
+	return errors.Join(validationErrors...)
+}
+
+func validateSingleBarrierSettings(
+	path string,
+	settings ScenarioSettings,
+	laneDeviceIDs map[string]struct{},
+) []error {
+	var validationErrors []error
+
+	barrierID := strings.TrimSpace(settings.Barrier)
 
 	if barrierID == "" {
 		validationErrors = append(
@@ -415,7 +488,7 @@ func validateScenario(
 			),
 		)
 
-		return errors.Join(validationErrors...)
+		return validationErrors
 	}
 
 	if _, exists := laneDeviceIDs[barrierID]; !exists {
@@ -429,5 +502,77 @@ func validateScenario(
 		)
 	}
 
-	return errors.Join(validationErrors...)
+	return validationErrors
+}
+
+func validateReleaseMode(
+	path string,
+	releaseMode string,
+) []error {
+	switch strings.TrimSpace(releaseMode) {
+	case "", ReleaseModeImmediate:
+		return nil
+
+	case ReleaseModeExternalConfirmation, ReleaseModeManualOperator:
+		return []error{
+			fmt.Errorf(
+				"%s.settings.release_mode %q пока не реализован",
+				path,
+				releaseMode,
+			),
+		}
+
+	default:
+		return []error{
+			fmt.Errorf(
+				"%s.settings.release_mode содержит неизвестное значение %q",
+				path,
+				releaseMode,
+			),
+		}
+	}
+}
+
+func validateTriggers(
+	path string,
+	triggers []string,
+) []error {
+	var validationErrors []error
+
+	for index, trigger := range triggers {
+		switch strings.TrimSpace(trigger) {
+		case TriggerOperator, TriggerCamera, TriggerCode, TriggerCard:
+		default:
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf(
+					"%s.settings.triggers[%d] содержит неизвестный источник %q",
+					path,
+					index,
+					trigger,
+				),
+			)
+		}
+	}
+
+	return validationErrors
+}
+
+func validateDirection(
+	path string,
+	direction string,
+) []error {
+	switch strings.TrimSpace(direction) {
+	case "", DirectionNormal, DirectionReverse:
+		return nil
+
+	default:
+		return []error{
+			fmt.Errorf(
+				"%s.settings.direction содержит неизвестное значение %q",
+				path,
+				direction,
+			),
+		}
+	}
 }

@@ -42,11 +42,23 @@ type LaneConfig struct {
 	ID       string         `yaml:"id"`
 	Name     string         `yaml:"name"`
 	Enabled  bool           `yaml:"enabled"`
+	Mode     string         `yaml:"mode"`
 	Devices  []string       `yaml:"devices"`
 	Scenario ScenarioConfig `yaml:"scenario"`
 }
 
 type ScenarioConfig struct {
-	Type     string            `yaml:"type"`
-	Settings map[string]string `yaml:"settings"`
+	Type     string           `yaml:"type"`
+	Settings ScenarioSettings `yaml:"settings"`
+}
+
+type ScenarioSettings struct {
+	Barrier string `yaml:"barrier"`
+
+	EntryBarrier string `yaml:"entry_barrier"`
+	ExitBarrier  string `yaml:"exit_barrier"`
+
+	ReleaseMode string   `yaml:"release_mode"`
+	Triggers    []string `yaml:"triggers"`
+	Direction   string   `yaml:"direction"`
 }

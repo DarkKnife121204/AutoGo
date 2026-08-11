@@ -27,11 +27,16 @@ checkpoints:
       - id: lane-1
         name: Линия №1
         enabled: true
+        mode: automatic
 
         devices:
           - barrier-1
 
         scenario:
-          type: single_barrier_manual_release
+          type: single_barrier
           settings:
             barrier: barrier-1
+            release_mode: immediate
+            triggers:
+              - operator
+            direction: normal
