@@ -7,12 +7,14 @@ import (
 )
 
 const (
-	ControllerTypeModbusTCP = "modbus_tcp"
+	ControllerTypeSiemens = "siemens"
 
 	DeviceTypeBarrier      = "barrier"
 	DeviceTypeTrafficLight = "traffic_light"
 	DeviceTypeDisplay      = "display"
 	DeviceTypeCamera       = "camera"
+	DeviceTypeKeypad       = "keypad"
+	DeviceTypeCard         = "card"
 	DeviceTypeSensor       = "sensor"
 
 	ScenarioTypeSingleBarrier = "single_barrier"
@@ -21,11 +23,6 @@ const (
 	ReleaseModeImmediate            = "immediate"
 	ReleaseModeExternalConfirmation = "external_confirmation"
 	ReleaseModeManualOperator       = "manual_operator"
-
-	TriggerOperator = "operator"
-	TriggerCamera   = "camera"
-	TriggerCode     = "code"
-	TriggerCard     = "card"
 
 	DirectionNormal  = "normal"
 	DirectionReverse = "reverse"
@@ -209,7 +206,7 @@ func validateController(
 	var validationErrors []error
 
 	switch controller.Type {
-	case ControllerTypeModbusTCP:
+	case ControllerTypeSiemens:
 	default:
 		validationErrors = append(
 			validationErrors,
@@ -266,6 +263,8 @@ func validateDevice(
 		DeviceTypeTrafficLight,
 		DeviceTypeDisplay,
 		DeviceTypeCamera,
+		DeviceTypeKeypad,
+		DeviceTypeCard,
 		DeviceTypeSensor:
 
 	default:
@@ -305,6 +304,31 @@ func validateDevice(
 					"%s.controller ссылается на неизвестный controller %q",
 					path,
 					device.Controller,
+				),
+			)
+		}
+	}
+
+	switch device.Type {
+	case DeviceTypeCamera, DeviceTypeKeypad, DeviceTypeCard:
+		if strings.TrimSpace(device.ExternalID) == "" {
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf(
+					"%s.external_id обязателен для %s",
+					path,
+					device.Type,
+				),
+			)
+		}
+
+		if strings.TrimSpace(device.Controller) != "" {
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf(
+					"%s.controller недопустим для %s",
+					path,
+					device.Type,
 				),
 			)
 		}
@@ -459,11 +483,6 @@ func validateScenario(
 
 	validationErrors = append(
 		validationErrors,
-		validateTriggers(path, scenario.Settings.Triggers)...,
-	)
-
-	validationErrors = append(
-		validationErrors,
 		validateDirection(path, scenario.Settings.Direction)...,
 	)
 
@@ -510,10 +529,10 @@ func validateReleaseMode(
 	releaseMode string,
 ) []error {
 	switch strings.TrimSpace(releaseMode) {
-	case "", ReleaseModeImmediate:
+	case "", ReleaseModeImmediate, ReleaseModeExternalConfirmation:
 		return nil
 
-	case ReleaseModeExternalConfirmation, ReleaseModeManualOperator:
+	case ReleaseModeManualOperator:
 		return []error{
 			fmt.Errorf(
 				"%s.settings.release_mode %q пока не реализован",
@@ -531,31 +550,6 @@ func validateReleaseMode(
 			),
 		}
 	}
-}
-
-func validateTriggers(
-	path string,
-	triggers []string,
-) []error {
-	var validationErrors []error
-
-	for index, trigger := range triggers {
-		switch strings.TrimSpace(trigger) {
-		case TriggerOperator, TriggerCamera, TriggerCode, TriggerCard:
-		default:
-			validationErrors = append(
-				validationErrors,
-				fmt.Errorf(
-					"%s.settings.triggers[%d] содержит неизвестный источник %q",
-					path,
-					index,
-					trigger,
-				),
-			)
-		}
-	}
-
-	return validationErrors
 }
 
 func validateDirection(

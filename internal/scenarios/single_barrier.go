@@ -1,12 +1,10 @@
 package scenarios
 
 import (
-	"errors"
-	"fmt"
-
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanestatus"
 	"AutoGo/internal/plc"
+	"errors"
 )
 
 const TypeSingleBarrier = "single_barrier"
@@ -23,14 +21,12 @@ type SingleBarrier struct {
 
 	releaseMode string
 	direction   string
-	triggers    []string
 }
 
 func NewSingleBarrier(
 	barrier *devices.Barrier,
 	releaseMode string,
 	direction string,
-	triggers []string,
 ) (*SingleBarrier, error) {
 	if barrier == nil {
 		return nil, errors.New(
@@ -50,7 +46,6 @@ func NewSingleBarrier(
 		barrier:     barrier,
 		releaseMode: releaseMode,
 		direction:   direction,
-		triggers:    triggers,
 	}, nil
 }
 
@@ -58,14 +53,11 @@ func (s *SingleBarrier) Type() string {
 	return TypeSingleBarrier
 }
 
-func (s *SingleBarrier) Trigger(source TriggerSource) error {
-	if s.releaseMode != defaultReleaseMode {
-		return fmt.Errorf(
-			"release_mode %q пока не реализован",
-			s.releaseMode,
-		)
-	}
+func (s *SingleBarrier) ReleaseMode() string {
+	return s.releaseMode
+}
 
+func (s *SingleBarrier) Trigger(source TriggerSource) error {
 	if s.direction == directionReverse {
 		return s.barrier.StartReverse()
 	}
@@ -109,7 +101,6 @@ func (s *SingleBarrier) Status() (lanestatus.LaneStatus, error) {
 		Scenario:    s.Type(),
 		ReleaseMode: s.releaseMode,
 		Direction:   s.direction,
-		Triggers:    s.triggers,
 		Phase:       phase,
 		Ready:       phase == lanestatus.PhaseIdle,
 		Busy:        phase == lanestatus.PhaseOpening || phase == lanestatus.PhaseOpened || phase == lanestatus.PhaseClosing,

@@ -1,23 +1,31 @@
 version: 1
 
 site:
-  id: site-7
-  name: Площадка №7
+  id: site-1
+  name: Площадка №1
 
 controllers:
   - id: plc-1
-    type: modbus_tcp
+    type: siemens
     address: ${PLC_1_ADDRESS}
     unit_id: 1
     timeout: 3s
-    enabled: true
 
 devices:
   - id: barrier-1
     name: Шлагбаум №1
     type: barrier
     controller: plc-1
-    enabled: true
+
+  - id: cam-1
+    name: Камера въезда
+    type: camera
+    external_id: Camera001
+
+  - id: keypad-1
+    name: Кодовая панель КПП1
+    type: keypad
+    external_id: KPP1-1
 
 checkpoints:
   - id: checkpoint-1
@@ -26,17 +34,16 @@ checkpoints:
     lanes:
       - id: lane-1
         name: Линия №1
-        enabled: true
         mode: automatic
 
         devices:
           - barrier-1
+          - cam-1
+          - keypad-1
 
         scenario:
           type: single_barrier
           settings:
             barrier: barrier-1
-            release_mode: immediate
-            triggers:
-              - operator
+            release_mode: external_confirmation
             direction: normal

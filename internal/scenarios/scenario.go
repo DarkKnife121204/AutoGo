@@ -7,11 +7,13 @@ type TriggerSource string
 const (
 	TriggerSourceAPI    TriggerSource = "api"
 	TriggerSourceCamera TriggerSource = "camera"
+	TriggerSourceCode   TriggerSource = "code"
 )
 
 type Scenario interface {
 	Type() string
 
+	ReleaseMode() string
 	Trigger(source TriggerSource) error
 
 	Start() error

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"AutoGo/internal/access"
 	"errors"
 	"fmt"
 	"log"
@@ -22,10 +23,6 @@ func buildPLCClients(
 	)
 
 	for _, controller := range controllers {
-		if !controller.Enabled {
-			continue
-		}
-
 		client, err := plcclient.New(
 			plcclient.Config{
 				Address: controller.Address,
@@ -76,10 +73,6 @@ func buildBarriers(
 	barriers := make(map[string]*devices.Barrier)
 
 	for _, deviceConfig := range deviceConfigs {
-		if !deviceConfig.Enabled {
-			continue
-		}
-
 		if deviceConfig.Type != config.DeviceTypeBarrier {
 			continue
 		}
@@ -117,47 +110,50 @@ func buildBarriers(
 
 func buildLanes(
 	checkpoints []config.CheckpointConfig,
+	deviceConfigs []config.DeviceConfig,
 	barriers map[string]*devices.Barrier,
+	decider access.Decider,
 ) (
+	map[string]*lanes.Lane,
 	map[string]*lanes.Lane,
 	map[string]*lanes.Lane,
 	error,
 ) {
+	deviceByID := make(
+		map[string]config.DeviceConfig,
+		len(deviceConfigs),
+	)
+
+	for _, device := range deviceConfigs {
+		deviceByID[device.ID] = device
+	}
+
 	result := make(map[string]*lanes.Lane)
 	barrierLane := make(map[string]*lanes.Lane)
+	triggerIndex := make(map[string]*lanes.Lane)
 
 	for _, checkpoint := range checkpoints {
 		for _, laneConfig := range checkpoint.Lanes {
-			if !laneConfig.Enabled {
-				continue
-			}
-
 			switch laneConfig.Scenario.Type {
 			case config.ScenarioTypeSingleBarrier:
 				barrierID := laneConfig.Scenario.Settings.Barrier
 
 				barrier, exists := barriers[barrierID]
 				if !exists {
-					return nil, nil, fmt.Errorf(
+					return nil, nil, nil, fmt.Errorf(
 						"для линии %q не найден шлагбаум %q",
 						laneConfig.ID,
 						barrierID,
 					)
 				}
 
-				triggers := laneConfig.Scenario.Settings.Triggers
-				if len(triggers) == 0 {
-					triggers = []string{config.TriggerOperator}
-				}
-
 				scenario, err := scenarios.NewSingleBarrier(
 					barrier,
 					laneConfig.Scenario.Settings.ReleaseMode,
 					laneConfig.Scenario.Settings.Direction,
-					triggers,
 				)
 				if err != nil {
-					return nil, nil, fmt.Errorf(
+					return nil, nil, nil, fmt.Errorf(
 						"создание сценария линии %q: %w",
 						laneConfig.ID,
 						err,
@@ -170,9 +166,10 @@ func buildLanes(
 					checkpoint.ID,
 					scenario,
 					lanes.ParseMode(laneConfig.Mode),
+					decider,
 				)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 
 				result[lane.ID] = lane
@@ -181,8 +178,28 @@ func buildLanes(
 					barrierLane[deviceID] = lane
 				}
 
+				for _, deviceID := range laneConfig.Devices {
+					device, ok := deviceByID[deviceID]
+					if !ok || device.ExternalID == "" {
+						continue
+					}
+
+					key := device.Type + ":" + device.ExternalID
+
+					if existing, exists := triggerIndex[key]; exists {
+						return nil, nil, nil, fmt.Errorf(
+							"источник %q уже привязан к линии %q, повторно у линии %q",
+							key,
+							existing.ID,
+							lane.ID,
+						)
+					}
+
+					triggerIndex[key] = lane
+				}
+
 			default:
-				return nil, nil, fmt.Errorf(
+				return nil, nil, nil, fmt.Errorf(
 					"линия %q использует неизвестный сценарий %q",
 					laneConfig.ID,
 					laneConfig.Scenario.Type,
@@ -192,12 +209,12 @@ func buildLanes(
 	}
 
 	if len(result) == 0 {
-		return nil, nil, errors.New(
+		return nil, nil, nil, errors.New(
 			"в конфигурации нет включённых линий",
 		)
 	}
 
-	return result, barrierLane, nil
+	return result, barrierLane, triggerIndex, nil
 }
 
 func buildCheckpoints(
@@ -215,10 +232,6 @@ func buildCheckpoints(
 		)
 
 		for _, laneConfig := range checkpointConfig.Lanes {
-			if !laneConfig.Enabled {
-				continue
-			}
-
 			lane, exists := siteLanes[laneConfig.ID]
 			if !exists {
 				return nil, fmt.Errorf(

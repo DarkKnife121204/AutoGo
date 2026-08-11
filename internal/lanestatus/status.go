@@ -19,7 +19,7 @@ type DeviceStatus struct {
 
 type VehicleInfo struct {
 	ID        string `json:"id"`
-	Plate     string `json:"plate,omitempty"`
+	Value     string `json:"value,omitempty"`
 	Source    string `json:"source"`
 	Stage     string `json:"stage"`
 	StartedAt int64  `json:"started_at"`
@@ -31,7 +31,6 @@ type LaneStatus struct {
 	Scenario    string                  `json:"scenario"`
 	ReleaseMode string                  `json:"release_mode"`
 	Direction   string                  `json:"direction"`
-	Triggers    []string                `json:"triggers"`
 	Phase       Phase                   `json:"phase"`
 	Ready       bool                    `json:"ready"`
 	Busy        bool                    `json:"busy"`

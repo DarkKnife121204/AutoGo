@@ -4,6 +4,7 @@ import "AutoGo/internal/lanestatus"
 
 type plcCommandRequest struct {
 	Command string `json:"command"`
+	Value   string `json:"value"`
 }
 
 type plcCommandResponse struct {

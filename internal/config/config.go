@@ -21,7 +21,6 @@ type ControllerConfig struct {
 	Address string        `yaml:"address"`
 	UnitID  uint8         `yaml:"unit_id"`
 	Timeout time.Duration `yaml:"timeout"`
-	Enabled bool          `yaml:"enabled"`
 }
 
 type DeviceConfig struct {
@@ -29,7 +28,7 @@ type DeviceConfig struct {
 	Name       string `yaml:"name"`
 	Type       string `yaml:"type"`
 	Controller string `yaml:"controller"`
-	Enabled    bool   `yaml:"enabled"`
+	ExternalID string `yaml:"external_id"`
 }
 
 type CheckpointConfig struct {
@@ -41,7 +40,6 @@ type CheckpointConfig struct {
 type LaneConfig struct {
 	ID       string         `yaml:"id"`
 	Name     string         `yaml:"name"`
-	Enabled  bool           `yaml:"enabled"`
 	Mode     string         `yaml:"mode"`
 	Devices  []string       `yaml:"devices"`
 	Scenario ScenarioConfig `yaml:"scenario"`
@@ -58,7 +56,6 @@ type ScenarioSettings struct {
 	EntryBarrier string `yaml:"entry_barrier"`
 	ExitBarrier  string `yaml:"exit_barrier"`
 
-	ReleaseMode string   `yaml:"release_mode"`
-	Triggers    []string `yaml:"triggers"`
-	Direction   string   `yaml:"direction"`
+	ReleaseMode string `yaml:"release_mode"`
+	Direction   string `yaml:"direction"`
 }

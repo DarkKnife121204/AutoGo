@@ -1,6 +1,7 @@
 package lanes
 
 import (
+	"AutoGo/internal/scenarios"
 	"crypto/rand"
 	"encoding/hex"
 	"time"
@@ -9,16 +10,19 @@ import (
 type passageStage string
 
 const (
+	stageWaiting  passageStage = "waiting"
 	stageStarting passageStage = "starting"
 	stageMoving   passageStage = "moving"
 )
 
 type VehicleContext struct {
 	ID        string
-	Plate     string
+	Value     string
 	Source    string
 	Stage     passageStage
 	StartedAt time.Time
+
+	source scenarios.TriggerSource
 }
 
 func newVehicleID() string {

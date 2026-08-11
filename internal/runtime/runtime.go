@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"AutoGo/internal/access"
 	"AutoGo/internal/checkpoints"
 	"AutoGo/internal/config"
 	"AutoGo/internal/devices"
@@ -9,11 +10,12 @@ import (
 )
 
 type Runtime struct {
-	Controllers map[string]*plcclient.Client
-	Barriers    map[string]*devices.Barrier
-	Lanes       map[string]*lanes.Lane
-	BarrierLane map[string]*lanes.Lane
-	Checkpoints map[string]*checkpoints.Checkpoint
+	Controllers  map[string]*plcclient.Client
+	Barriers     map[string]*devices.Barrier
+	Lanes        map[string]*lanes.Lane
+	BarrierLane  map[string]*lanes.Lane
+	TriggerIndex map[string]*lanes.Lane
+	Checkpoints  map[string]*checkpoints.Checkpoint
 }
 
 func Build(cfg config.Config) (*Runtime, error) {
@@ -29,7 +31,14 @@ func Build(cfg config.Config) (*Runtime, error) {
 		return nil, err
 	}
 
-	siteLanes, barrierLane, err := buildLanes(cfg.Checkpoints, barriers)
+	decider := access.NewStubDecider()
+
+	siteLanes, barrierLane, triggerIndex, err := buildLanes(
+		cfg.Checkpoints,
+		cfg.Devices,
+		barriers,
+		decider,
+	)
 	if err != nil {
 		closePLCClients(controllers)
 
@@ -44,11 +53,12 @@ func Build(cfg config.Config) (*Runtime, error) {
 	}
 
 	return &Runtime{
-		Controllers: controllers,
-		Barriers:    barriers,
-		Lanes:       siteLanes,
-		BarrierLane: barrierLane,
-		Checkpoints: siteCheckpoints,
+		Controllers:  controllers,
+		Barriers:     barriers,
+		Lanes:        siteLanes,
+		BarrierLane:  barrierLane,
+		TriggerIndex: triggerIndex,
+		Checkpoints:  siteCheckpoints,
 	}, nil
 }
 

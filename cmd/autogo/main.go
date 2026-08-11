@@ -72,6 +72,7 @@ func main() {
 		rt.Barriers,
 		rt.Lanes,
 		rt.BarrierLane,
+		rt.TriggerIndex,
 		rt.Checkpoints,
 	)
 

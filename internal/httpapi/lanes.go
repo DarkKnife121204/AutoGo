@@ -158,7 +158,7 @@ func (a *API) laneCommand(
 
 	switch command {
 	case "trigger":
-		err = lane.Trigger(scenarios.TriggerSourceAPI, "")
+		err = lane.Trigger(scenarios.TriggerSourceAPI, request.Value)
 
 	case "start":
 		err = lane.Start()
