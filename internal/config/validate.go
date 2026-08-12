@@ -314,10 +314,18 @@ func validateDevice(
 		if strings.TrimSpace(device.ExternalID) == "" {
 			validationErrors = append(
 				validationErrors,
+				fmt.Errorf("%s.external_id обязателен для %s", path, device.Type),
+			)
+		}
+
+		switch strings.TrimSpace(device.Direction) {
+		case "", DirectionNormal, DirectionReverse:
+		default:
+			validationErrors = append(
+				validationErrors,
 				fmt.Errorf(
-					"%s.external_id обязателен для %s",
-					path,
-					device.Type,
+					"%s.direction содержит неизвестное значение %q",
+					path, device.Direction,
 				),
 			)
 		}
@@ -454,11 +462,11 @@ func validateScenario(
 	case ScenarioTypeDoubleBarrier:
 		validationErrors = append(
 			validationErrors,
-			fmt.Errorf(
-				"%s.type %q пока не реализован",
+			validateDoubleBarrierSettings(
 				path,
-				scenario.Type,
-			),
+				scenario.Settings,
+				laneDeviceIDs,
+			)...,
 		)
 
 		return errors.Join(validationErrors...)
@@ -481,10 +489,15 @@ func validateScenario(
 		validateReleaseMode(path, scenario.Settings.ReleaseMode)...,
 	)
 
-	validationErrors = append(
-		validationErrors,
-		validateDirection(path, scenario.Settings.Direction)...,
-	)
+	if scenario.Settings.QueueDepth < 0 {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.settings.queue_depth не может быть отрицательным",
+				path,
+			),
+		)
+	}
 
 	return errors.Join(validationErrors...)
 }
@@ -517,6 +530,59 @@ func validateSingleBarrierSettings(
 				"%s.settings.barrier ссылается на устройство %q, отсутствующее в линии",
 				path,
 				barrierID,
+			),
+		)
+	}
+
+	return validationErrors
+}
+
+func validateDoubleBarrierSettings(
+	path string,
+	settings ScenarioSettings,
+	laneDeviceIDs map[string]struct{},
+) []error {
+	var validationErrors []error
+
+	entry := strings.TrimSpace(settings.EntryBarrier)
+	exit := strings.TrimSpace(settings.ExitBarrier)
+
+	if entry == "" {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf("%s.settings.entry_barrier обязателен", path),
+		)
+	} else if _, ok := laneDeviceIDs[entry]; !ok {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.settings.entry_barrier ссылается на устройство %q, отсутствующее в линии",
+				path, entry,
+			),
+		)
+	}
+
+	if exit == "" {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf("%s.settings.exit_barrier обязателен", path),
+		)
+	} else if _, ok := laneDeviceIDs[exit]; !ok {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.settings.exit_barrier ссылается на устройство %q, отсутствующее в линии",
+				path, exit,
+			),
+		)
+	}
+
+	if entry != "" && entry == exit {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.settings: entry_barrier и exit_barrier должны быть разными",
+				path,
 			),
 		)
 	}

@@ -1,32 +1,46 @@
 package scenarios
 
 import (
+	"errors"
+	"sync"
+	"time"
+
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanestatus"
 	"AutoGo/internal/plc"
-	"errors"
 )
 
 const TypeSingleBarrier = "single_barrier"
 
 const (
 	defaultReleaseMode = "immediate"
-	defaultDirection   = "normal"
 
 	directionReverse = "reverse"
+
+	singleStartTimeout = 10 * time.Second
+)
+
+type passageStage int
+
+const (
+	stageIdle passageStage = iota
+	stageStarting
+	stageMoving
 )
 
 type SingleBarrier struct {
 	barrier *devices.Barrier
 
 	releaseMode string
-	direction   string
+
+	mu        sync.Mutex
+	stage     passageStage
+	startedAt time.Time
 }
 
 func NewSingleBarrier(
 	barrier *devices.Barrier,
 	releaseMode string,
-	direction string,
 ) (*SingleBarrier, error) {
 	if barrier == nil {
 		return nil, errors.New(
@@ -38,14 +52,9 @@ func NewSingleBarrier(
 		releaseMode = defaultReleaseMode
 	}
 
-	if direction == "" {
-		direction = defaultDirection
-	}
-
 	return &SingleBarrier{
 		barrier:     barrier,
 		releaseMode: releaseMode,
-		direction:   direction,
 	}, nil
 }
 
@@ -57,12 +66,59 @@ func (s *SingleBarrier) ReleaseMode() string {
 	return s.releaseMode
 }
 
-func (s *SingleBarrier) Trigger(source TriggerSource) error {
-	if s.direction == directionReverse {
+func (s *SingleBarrier) Begin(direction string) error {
+	s.mu.Lock()
+	s.stage = stageStarting
+	s.startedAt = time.Now()
+	s.mu.Unlock()
+
+	if direction == directionReverse {
 		return s.barrier.StartReverse()
 	}
 
 	return s.barrier.Start()
+}
+
+func (s *SingleBarrier) Advance() (bool, error) {
+	plcStatus, err := s.barrier.Status()
+	if err != nil {
+		return false, err
+	}
+
+	phase := phaseFromState(plcStatus.State)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if plcStatus.HasAlarm() || phase == lanestatus.PhaseError {
+		s.stage = stageIdle
+
+		return true, nil
+	}
+
+	switch s.stage {
+	case stageStarting:
+		if phase != lanestatus.PhaseIdle {
+			s.stage = stageMoving
+
+			return false, nil
+		}
+
+		if time.Since(s.startedAt) > singleStartTimeout {
+			s.stage = stageIdle
+
+			return true, nil
+		}
+
+	case stageMoving:
+		if phase == lanestatus.PhaseIdle {
+			s.stage = stageIdle
+
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (s *SingleBarrier) Start() error {
@@ -89,28 +145,32 @@ func (s *SingleBarrier) Reset() error {
 	return s.barrier.Reset()
 }
 
-func (s *SingleBarrier) Status() (lanestatus.LaneStatus, error) {
+func (s *SingleBarrier) Confirm() error {
+	return errors.New(
+		"подтверждение неприменимо для сценария single_barrier",
+	)
+}
+
+func (s *SingleBarrier) Reject() error {
+	return errors.New(
+		"отклонение неприменимо для сценария single_barrier",
+	)
+}
+
+func (s *SingleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 	plcStatus, err := s.barrier.Status()
 	if err != nil {
-		return lanestatus.LaneStatus{}, err
+		return lanestatus.Snapshot{}, err
 	}
 
-	phase := phaseFromState(plcStatus.State)
-
-	return lanestatus.LaneStatus{
-		Scenario:    s.Type(),
-		ReleaseMode: s.releaseMode,
-		Direction:   s.direction,
-		Phase:       phase,
-		Ready:       phase == lanestatus.PhaseIdle,
-		Busy:        phase == lanestatus.PhaseOpening || phase == lanestatus.PhaseOpened || phase == lanestatus.PhaseClosing,
-		Allowed:     nil,
-		Alarm:       plcStatus.HasAlarm(),
+	return lanestatus.Snapshot{
+		Phase: phaseFromState(plcStatus.State),
+		Alarm: plcStatus.HasAlarm(),
 		Devices: map[string]lanestatus.DeviceStatus{
 			s.barrier.ID: {
-				DeviceID: s.barrier.ID,
-				Type:     "barrier",
-				State:    plcStatus.State.String(),
+				Type:       "barrier",
+				State:      plcStatus.State.String(),
+				Controller: s.barrier.ControllerID,
 			},
 		},
 	}, nil

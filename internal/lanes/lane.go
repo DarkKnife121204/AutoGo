@@ -8,15 +8,14 @@ import (
 	"time"
 
 	"AutoGo/internal/access"
+	"AutoGo/internal/devices"
 	"AutoGo/internal/lanestatus"
 	"AutoGo/internal/scenarios"
 )
 
 const (
 	pollInterval = 200 * time.Millisecond
-	startTimeout = 10 * time.Second
 
-	releaseModeImmediate            = "immediate"
 	releaseModeExternalConfirmation = "external_confirmation"
 )
 
@@ -28,10 +27,14 @@ type Lane struct {
 
 	releaseMode string
 	decider     access.Decider
+	sources     []*devices.Source
 
 	mu            sync.Mutex
 	mode          Mode
 	activeVehicle *VehicleContext
+	pending       []*VehicleContext
+	queue         []*VehicleContext
+	queueDepth    int
 
 	stopPoller chan struct{}
 	pollerDone chan struct{}
@@ -44,6 +47,8 @@ func New(
 	scenario scenarios.Scenario,
 	defaultMode Mode,
 	decider access.Decider,
+	sources []*devices.Source,
+	queueDepth int,
 ) (*Lane, error) {
 	if id == "" {
 		return nil, errors.New("ID линии не указан")
@@ -63,7 +68,9 @@ func New(
 		Scenario:     scenario,
 		releaseMode:  scenario.ReleaseMode(),
 		decider:      decider,
+		sources:      sources,
 		mode:         defaultMode,
+		queueDepth:   queueDepth,
 	}, nil
 }
 
@@ -100,9 +107,18 @@ func (l *Lane) Reset() error {
 	return l.Scenario.Reset()
 }
 
+func (l *Lane) Confirm() error {
+	return l.Scenario.Confirm()
+}
+
+func (l *Lane) Reject() error {
+	return l.Scenario.Reject()
+}
+
 func (l *Lane) Trigger(
 	source scenarios.TriggerSource,
 	value string,
+	direction string,
 ) error {
 	l.mu.Lock()
 
@@ -114,7 +130,40 @@ func (l *Lane) Trigger(
 		)
 	}
 
-	if l.activeVehicle != nil {
+	if l.activeVehicle == nil {
+		vehicle := l.newVehicleLocked(source, value, direction)
+
+		if l.releaseMode == releaseModeExternalConfirmation {
+			vehicle.Waiting = true
+			l.activeVehicle = vehicle
+			l.mu.Unlock()
+
+			go l.decideAsync(vehicle)
+
+			return nil
+		}
+
+		l.activeVehicle = vehicle
+		l.mu.Unlock()
+
+		if err := l.Scenario.Begin(vehicle.Direction); err != nil {
+			l.clearVehicle(vehicle)
+
+			return err
+		}
+
+		return nil
+	}
+
+	if l.isDuplicateLocked(source, value) {
+		l.mu.Unlock()
+
+		return errors.New(
+			"повторное событие по тому же идентификатору игнорируется",
+		)
+	}
+
+	if l.queueDepth <= 0 {
 		l.mu.Unlock()
 
 		return errors.New(
@@ -122,35 +171,140 @@ func (l *Lane) Trigger(
 		)
 	}
 
-	vehicle := &VehicleContext{
-		ID:        newVehicleID(),
-		Value:     value,
-		Source:    string(source),
-		StartedAt: time.Now(),
-		source:    source,
-	}
-
-	if l.releaseMode == releaseModeExternalConfirmation {
-		vehicle.Stage = stageWaiting
-		l.activeVehicle = vehicle
+	if len(l.pending)+len(l.queue) >= l.queueDepth {
 		l.mu.Unlock()
 
-		go l.decideAsync(vehicle)
+		return errors.New(
+			"очередь заполнена",
+		)
+	}
+
+	vehicle := l.newVehicleLocked(source, value, direction)
+
+	if l.releaseMode != releaseModeExternalConfirmation {
+		l.queue = append(l.queue, vehicle)
+		l.mu.Unlock()
 
 		return nil
 	}
 
-	vehicle.Stage = stageStarting
-	l.activeVehicle = vehicle
+	l.pending = append(l.pending, vehicle)
 	l.mu.Unlock()
 
-	if err := l.Scenario.Trigger(source); err != nil {
-		l.clearVehicle(vehicle)
-
-		return err
-	}
+	go l.decidePending(vehicle)
 
 	return nil
+}
+
+func (l *Lane) newVehicleLocked(
+	source scenarios.TriggerSource,
+	value string,
+	direction string,
+) *VehicleContext {
+	if direction == "" {
+		direction = "normal"
+	}
+
+	return &VehicleContext{
+		ID:        newVehicleID(),
+		Value:     value,
+		Source:    string(source),
+		Direction: direction,
+		StartedAt: time.Now(),
+		source:    source,
+	}
+}
+
+func (l *Lane) isDuplicateLocked(
+	source scenarios.TriggerSource,
+	value string,
+) bool {
+	if value == "" {
+		return false
+	}
+
+	src := string(source)
+
+	if l.activeVehicle != nil &&
+		l.activeVehicle.Value == value &&
+		l.activeVehicle.Source == src {
+		return true
+	}
+
+	for _, v := range l.pending {
+		if v.Value == value && v.Source == src {
+			return true
+		}
+	}
+
+	for _, v := range l.queue {
+		if v.Value == value && v.Source == src {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (l *Lane) decidePending(vehicle *VehicleContext) {
+	decision, err := l.decider.Decide(
+		context.Background(),
+		access.Request{
+			LaneID:     l.ID,
+			Credential: vehicle.Value,
+			Source:     vehicle.Source,
+			Direction:  vehicle.Direction,
+		},
+	)
+
+	allowed := err == nil && decision.Allowed
+
+	l.mu.Lock()
+
+	l.removePendingLocked(vehicle)
+
+	if !allowed {
+		l.mu.Unlock()
+
+		return
+	}
+
+	l.queue = append(l.queue, vehicle)
+
+	next := l.takeQueueHeadLocked()
+	l.mu.Unlock()
+
+	if next != nil {
+		l.beginVehicle(next)
+	}
+}
+
+func (l *Lane) removePendingLocked(vehicle *VehicleContext) {
+	for i, v := range l.pending {
+		if v == vehicle {
+			l.pending = append(l.pending[:i], l.pending[i+1:]...)
+
+			return
+		}
+	}
+}
+
+func (l *Lane) takeQueueHeadLocked() *VehicleContext {
+	if l.activeVehicle != nil || len(l.queue) == 0 {
+		return nil
+	}
+
+	head := l.queue[0]
+	l.queue = l.queue[1:]
+	l.activeVehicle = head
+
+	return head
+}
+
+func (l *Lane) beginVehicle(vehicle *VehicleContext) {
+	if err := l.Scenario.Begin(vehicle.Direction); err != nil {
+		l.clearVehicle(vehicle)
+	}
 }
 
 func (l *Lane) decideAsync(vehicle *VehicleContext) {
@@ -160,7 +314,7 @@ func (l *Lane) decideAsync(vehicle *VehicleContext) {
 			LaneID:     l.ID,
 			Credential: vehicle.Value,
 			Source:     vehicle.Source,
-			Direction:  l.releaseMode,
+			Direction:  vehicle.Direction,
 		},
 	)
 
@@ -175,8 +329,7 @@ func (l *Lane) applyDecision(
 ) {
 	l.mu.Lock()
 
-	if l.activeVehicle != vehicle ||
-		vehicle.Stage != stageWaiting {
+	if l.activeVehicle != vehicle || !vehicle.Waiting {
 		l.mu.Unlock()
 
 		return
@@ -184,61 +337,137 @@ func (l *Lane) applyDecision(
 
 	if !allowed {
 		l.activeVehicle = nil
+
+		next := l.takeQueueHeadLocked()
 		l.mu.Unlock()
+
+		if next != nil {
+			l.beginVehicle(next)
+		}
 
 		return
 	}
 
-	vehicle.Stage = stageStarting
-	vehicle.StartedAt = time.Now()
-	source := vehicle.source
+	vehicle.Waiting = false
 	l.mu.Unlock()
 
-	if err := l.Scenario.Trigger(source); err != nil {
-		l.clearVehicle(vehicle)
-	}
+	l.beginVehicle(vehicle)
 }
 
 func (l *Lane) clearVehicle(vehicle *VehicleContext) {
 	l.mu.Lock()
+
 	if l.activeVehicle == vehicle {
 		l.activeVehicle = nil
 	}
+
+	next := l.takeQueueHeadLocked()
 	l.mu.Unlock()
+
+	if next != nil {
+		l.beginVehicle(next)
+	}
 }
 
 func (l *Lane) Status() (lanestatus.LaneStatus, error) {
-	status, err := l.Scenario.Status()
+	snapshot, err := l.Scenario.Snapshot()
 	if err != nil {
 		return lanestatus.LaneStatus{}, err
 	}
 
-	status.LaneID = l.ID
+	deviceMap := make(
+		map[string]lanestatus.DeviceStatus,
+		len(snapshot.Devices)+len(l.sources),
+	)
+
+	for id, d := range snapshot.Devices {
+		deviceMap[id] = d
+	}
+
+	for _, source := range l.sources {
+		deviceMap[source.ID] = lanestatus.DeviceStatus{
+			Type:       source.Type,
+			ExternalID: source.ExternalID,
+		}
+	}
+
+	result := lanestatus.LaneStatus{
+		LaneID:      l.ID,
+		Scenario:    l.Scenario.Type(),
+		ReleaseMode: l.releaseMode,
+		Devices:     deviceMap,
+	}
 
 	l.mu.Lock()
-	status.Mode = string(l.mode)
+	mode := l.mode
+	vehicle := l.activeVehicle
 
-	if l.activeVehicle != nil {
-		vehicle := l.activeVehicle
-
-		status.Busy = true
-		status.Ready = false
-
-		if vehicle.Stage == stageWaiting {
-			status.Phase = lanestatus.PhaseWaitingConfirmation
+	if vehicle != nil {
+		stage := "active"
+		if vehicle.Waiting {
+			stage = "waiting"
 		}
 
-		status.Vehicle = &lanestatus.VehicleInfo{
+		result.Vehicle = &lanestatus.VehicleInfo{
 			ID:        vehicle.ID,
 			Value:     vehicle.Value,
+			Direction: vehicle.Direction,
 			Source:    vehicle.Source,
-			Stage:     string(vehicle.Stage),
+			Stage:     stage,
 			StartedAt: vehicle.StartedAt.Unix(),
 		}
 	}
+
+	for _, v := range l.queue {
+		result.Queue = append(result.Queue, lanestatus.QueuedInfo{
+			ID:        v.ID,
+			Value:     v.Value,
+			Source:    v.Source,
+			StartedAt: v.StartedAt.Unix(),
+		})
+	}
+
+	result.State = deriveState(snapshot, mode, vehicle)
 	l.mu.Unlock()
 
-	return status, nil
+	return result, nil
+}
+
+func deriveState(
+	snapshot lanestatus.Snapshot,
+	mode Mode,
+	vehicle *VehicleContext,
+) lanestatus.State {
+	if snapshot.Alarm || snapshot.Phase == lanestatus.PhaseError {
+		return lanestatus.StateAlarm
+	}
+
+	if mode == ModeManual {
+		return lanestatus.StateStopping
+	}
+
+	switch snapshot.Stage {
+	case "entry":
+		return lanestatus.StateWaitingTransfer1
+	case "confirm":
+		return lanestatus.StateConfirm
+	case "exit":
+		return lanestatus.StateWaitingTransfer2
+	case "reject":
+		return lanestatus.StateRollingBack
+	}
+
+	if vehicle != nil && !vehicle.Waiting {
+		return lanestatus.StateWaitingTransfer
+	}
+
+	if snapshot.Phase == lanestatus.PhaseOpening ||
+		snapshot.Phase == lanestatus.PhaseOpened ||
+		snapshot.Phase == lanestatus.PhaseClosing {
+		return lanestatus.StateWaitingTransfer
+	}
+
+	return lanestatus.StateIdentEntrance
 }
 
 func (l *Lane) StartPoller() {
@@ -274,55 +503,20 @@ func (l *Lane) StopPoller() {
 
 func (l *Lane) poll() {
 	l.mu.Lock()
-	physical := l.activeVehicle != nil &&
-		l.activeVehicle.Stage != stageWaiting
+	vehicle := l.activeVehicle
+	physical := vehicle != nil && !vehicle.Waiting
 	l.mu.Unlock()
 
 	if !physical {
 		return
 	}
 
-	status, err := l.Scenario.Status()
+	done, err := l.Scenario.Advance()
 	if err != nil {
 		return
 	}
 
-	l.applyProgress(status.Phase, status.Alarm)
-}
-
-func (l *Lane) applyProgress(
-	phase lanestatus.Phase,
-	alarm bool,
-) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	vehicle := l.activeVehicle
-	if vehicle == nil {
-		return
-	}
-
-	if alarm || phase == lanestatus.PhaseError {
-		l.activeVehicle = nil
-
-		return
-	}
-
-	switch vehicle.Stage {
-	case stageStarting:
-		if phase != lanestatus.PhaseIdle {
-			vehicle.Stage = stageMoving
-
-			return
-		}
-
-		if time.Since(vehicle.StartedAt) > startTimeout {
-			l.activeVehicle = nil
-		}
-
-	case stageMoving:
-		if phase == lanestatus.PhaseIdle {
-			l.activeVehicle = nil
-		}
+	if done {
+		l.clearVehicle(vehicle)
 	}
 }

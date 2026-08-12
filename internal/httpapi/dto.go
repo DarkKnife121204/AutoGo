@@ -38,8 +38,6 @@ type plcStatusResponse struct {
 }
 
 type laneStatusResponse struct {
-	Status string `json:"status"`
-
 	lanestatus.LaneStatus
 }
 

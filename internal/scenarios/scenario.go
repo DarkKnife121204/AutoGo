@@ -14,7 +14,13 @@ type Scenario interface {
 	Type() string
 
 	ReleaseMode() string
-	Trigger(source TriggerSource) error
+
+	Begin(direction string) error
+
+	Advance() (done bool, err error)
+
+	Confirm() error
+	Reject() error
 
 	Start() error
 	StartReverse() error
@@ -23,5 +29,5 @@ type Scenario interface {
 	Close() error
 	Reset() error
 
-	Status() (lanestatus.LaneStatus, error)
+	Snapshot() (lanestatus.Snapshot, error)
 }

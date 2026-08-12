@@ -11,11 +11,33 @@ controllers:
     unit_id: 1
     timeout: 3s
 
+  - id: plc-2
+    type: siemens
+    address: ${PLC_2_ADDRESS}
+    unit_id: 1
+    timeout: 3s
+
+  - id: plc-3
+    type: siemens
+    address: ${PLC_3_ADDRESS}
+    unit_id: 1
+    timeout: 3s
+
 devices:
   - id: barrier-1
     name: Шлагбаум №1
     type: barrier
     controller: plc-1
+
+  - id: barrier-2
+    name: Внешний шлагбаум шлюза
+    type: barrier
+    controller: plc-2
+
+  - id: barrier-3
+    name: Внутренний шлагбаум шлюза
+    type: barrier
+    controller: plc-3
 
   - id: cam-1
     name: Камера въезда
@@ -27,6 +49,18 @@ devices:
     type: keypad
     external_id: KPP1-1
 
+  - id: cam-2
+    name: Камера въезда шлюза
+    type: camera
+    external_id: Camera002
+    direction: normal
+
+  - id: cam-3
+    name: Камера выезда шлюза реверс
+    type: camera
+    external_id: Camera003
+    direction: reverse
+
 checkpoints:
   - id: checkpoint-1
     name: КПП №1
@@ -35,15 +69,29 @@ checkpoints:
       - id: lane-1
         name: Линия №1
         mode: automatic
-
         devices:
           - barrier-1
           - cam-1
           - keypad-1
-
         scenario:
           type: single_barrier
           settings:
             barrier: barrier-1
             release_mode: external_confirmation
+
+      - id: lane-2
+        name: Линия №2 (шлюз)
+        mode: automatic
+        devices:
+          - barrier-2
+          - barrier-3
+          - cam-2
+          - cam-3
+        scenario:
+          type: double_barrier
+          settings:
+            entry_barrier: barrier-2
+            exit_barrier: barrier-3
+            release_mode: external_confirmation
             direction: normal
+            queue_depth: 2

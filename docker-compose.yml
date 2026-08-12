@@ -3,18 +3,54 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.plc
-
     container_name: autogo-plc-emulator
     restart: unless-stopped
-
     env_file:
       - .env
-
+    environment:
+      MODBUS_LISTEN_ADDRESS: "0.0.0.0:5020"
     ports:
-      - "${MODBUS_PORT:-5020}:5020"
-
+      - "5020:5020"
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 5020"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  plc-emulator-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.plc
+    container_name: autogo-plc-emulator-2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MODBUS_LISTEN_ADDRESS: "0.0.0.0:5021"
+    ports:
+      - "5021:5021"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5021"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  plc-emulator-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.plc
+    container_name: autogo-plc-emulator-3
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MODBUS_LISTEN_ADDRESS: "0.0.0.0:5022"
+    ports:
+      - "5022:5022"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5022"]
       interval: 2s
       timeout: 2s
       retries: 10
@@ -24,21 +60,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.autogate
-
     container_name: autogo
     restart: unless-stopped
-
     env_file:
       - .env
-
     environment:
       AUTOGO_HTTP_ADDRESS: ":5001"
       AUTOGO_CONFIG_PATH: /app/config/site.yaml
       PLC_1_ADDRESS: plc-emulator:5020
-
+      PLC_2_ADDRESS: plc-emulator-2:5021
+      PLC_3_ADDRESS: plc-emulator-3:5022
     depends_on:
       plc-emulator:
         condition: service_healthy
-
+      plc-emulator-2:
+        condition: service_healthy
+      plc-emulator-3:
+        condition: service_healthy
     ports:
-      - "${AUTOGO_PORT:-5001}:5001"
+      - "5001:5001"

@@ -14,7 +14,7 @@ type Runtime struct {
 	Barriers     map[string]*devices.Barrier
 	Lanes        map[string]*lanes.Lane
 	BarrierLane  map[string]*lanes.Lane
-	TriggerIndex map[string]*lanes.Lane
+	TriggerIndex map[string]lanes.TriggerTarget
 	Checkpoints  map[string]*checkpoints.Checkpoint
 }
 

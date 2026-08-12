@@ -12,7 +12,7 @@ type API struct {
 	barriers     map[string]*devices.Barrier
 	lanes        map[string]*lanes.Lane
 	barrierLane  map[string]*lanes.Lane
-	triggerIndex map[string]*lanes.Lane
+	triggerIndex map[string]lanes.TriggerTarget
 	checkpoints  map[string]*checkpoints.Checkpoint
 }
 
@@ -20,7 +20,7 @@ func New(
 	barriers map[string]*devices.Barrier,
 	siteLanes map[string]*lanes.Lane,
 	barrierLane map[string]*lanes.Lane,
-	triggerIndex map[string]*lanes.Lane,
+	triggerIndex map[string]lanes.TriggerTarget,
 	siteCheckpoints map[string]*checkpoints.Checkpoint,
 ) *API {
 	return &API{

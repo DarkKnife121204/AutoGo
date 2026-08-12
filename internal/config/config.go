@@ -29,6 +29,7 @@ type DeviceConfig struct {
 	Type       string `yaml:"type"`
 	Controller string `yaml:"controller"`
 	ExternalID string `yaml:"external_id"`
+	Direction  string `yaml:"direction"`
 }
 
 type CheckpointConfig struct {
@@ -57,5 +58,5 @@ type ScenarioSettings struct {
 	ExitBarrier  string `yaml:"exit_barrier"`
 
 	ReleaseMode string `yaml:"release_mode"`
-	Direction   string `yaml:"direction"`
+	QueueDepth  int    `yaml:"queue_depth"`
 }

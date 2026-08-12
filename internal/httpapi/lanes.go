@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"AutoGo/internal/lanes"
-	"AutoGo/internal/scenarios"
 )
 
 func (a *API) laneHandler(
@@ -108,7 +107,6 @@ func (a *API) laneStatus(
 		w,
 		http.StatusOK,
 		laneStatusResponse{
-			Status:     "ok",
 			LaneStatus: status,
 		},
 	)
@@ -157,8 +155,6 @@ func (a *API) laneCommand(
 	var err error
 
 	switch command {
-	case "trigger":
-		err = lane.Trigger(scenarios.TriggerSourceAPI, request.Value)
 
 	case "start":
 		err = lane.Start()
@@ -168,6 +164,12 @@ func (a *API) laneCommand(
 
 	case "reset":
 		err = lane.Reset()
+
+	case "confirm":
+		err = lane.Confirm()
+
+	case "reject":
+		err = lane.Reject()
 
 	default:
 		writeJSON(

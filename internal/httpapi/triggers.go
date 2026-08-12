@@ -118,7 +118,7 @@ func (a *API) dispatchTrigger(
 	source scenarios.TriggerSource,
 	value string,
 ) {
-	lane, exists := a.triggerIndex[indexKey]
+	target, exists := a.triggerIndex[indexKey]
 	if !exists {
 		writeJSON(
 			w,
@@ -132,7 +132,7 @@ func (a *API) dispatchTrigger(
 		return
 	}
 
-	if err := lane.Trigger(source, value); err != nil {
+	if err := target.Lane.Trigger(source, value, target.Direction); err != nil {
 		writeJSON(
 			w,
 			http.StatusConflict,
@@ -150,7 +150,7 @@ func (a *API) dispatchTrigger(
 		http.StatusAccepted,
 		map[string]string{
 			"status": "accepted",
-			"lane":   lane.ID,
+			"lane":   target.Lane.ID,
 		},
 	)
 }

@@ -7,19 +7,12 @@ import (
 	"time"
 )
 
-type passageStage string
-
-const (
-	stageWaiting  passageStage = "waiting"
-	stageStarting passageStage = "starting"
-	stageMoving   passageStage = "moving"
-)
-
 type VehicleContext struct {
 	ID        string
 	Value     string
 	Source    string
-	Stage     passageStage
+	Direction string
+	Waiting   bool
 	StartedAt time.Time
 
 	source scenarios.TriggerSource

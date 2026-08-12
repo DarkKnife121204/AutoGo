@@ -116,7 +116,7 @@ func buildLanes(
 ) (
 	map[string]*lanes.Lane,
 	map[string]*lanes.Lane,
-	map[string]*lanes.Lane,
+	map[string]lanes.TriggerTarget,
 	error,
 ) {
 	deviceByID := make(
@@ -130,7 +130,7 @@ func buildLanes(
 
 	result := make(map[string]*lanes.Lane)
 	barrierLane := make(map[string]*lanes.Lane)
-	triggerIndex := make(map[string]*lanes.Lane)
+	triggerIndex := make(map[string]lanes.TriggerTarget)
 
 	for _, checkpoint := range checkpoints {
 		for _, laneConfig := range checkpoint.Lanes {
@@ -150,7 +150,6 @@ func buildLanes(
 				scenario, err := scenarios.NewSingleBarrier(
 					barrier,
 					laneConfig.Scenario.Settings.ReleaseMode,
-					laneConfig.Scenario.Settings.Direction,
 				)
 				if err != nil {
 					return nil, nil, nil, fmt.Errorf(
@@ -167,6 +166,8 @@ func buildLanes(
 					scenario,
 					lanes.ParseMode(laneConfig.Mode),
 					decider,
+					collectSources(laneConfig, deviceByID),
+					laneConfig.Scenario.Settings.QueueDepth,
 				)
 				if err != nil {
 					return nil, nil, nil, err
@@ -185,17 +186,86 @@ func buildLanes(
 					}
 
 					key := device.Type + ":" + device.ExternalID
-
 					if existing, exists := triggerIndex[key]; exists {
 						return nil, nil, nil, fmt.Errorf(
 							"источник %q уже привязан к линии %q, повторно у линии %q",
-							key,
-							existing.ID,
-							lane.ID,
+							key, existing.Lane.ID, lane.ID,
 						)
 					}
+					triggerIndex[key] = lanes.TriggerTarget{
+						Lane:      lane,
+						Direction: device.Direction,
+					}
+				}
 
-					triggerIndex[key] = lane
+			case config.ScenarioTypeDoubleBarrier:
+				entryID := laneConfig.Scenario.Settings.EntryBarrier
+				exitID := laneConfig.Scenario.Settings.ExitBarrier
+
+				entryBarrier, ok1 := barriers[entryID]
+				exitBarrier, ok2 := barriers[exitID]
+
+				if !ok1 {
+					return nil, nil, nil, fmt.Errorf(
+						"для линии %q не найден шлагбаум %q",
+						laneConfig.ID, entryID,
+					)
+				}
+				if !ok2 {
+					return nil, nil, nil, fmt.Errorf(
+						"для линии %q не найден шлагбаум %q",
+						laneConfig.ID, exitID,
+					)
+				}
+
+				scenario, err := scenarios.NewDoubleBarrier(
+					entryBarrier,
+					exitBarrier,
+					laneConfig.Scenario.Settings.ReleaseMode,
+				)
+				if err != nil {
+					return nil, nil, nil, fmt.Errorf(
+						"создание сценария линии %q: %w",
+						laneConfig.ID, err,
+					)
+				}
+
+				lane, err := lanes.New(
+					laneConfig.ID,
+					laneConfig.Name,
+					checkpoint.ID,
+					scenario,
+					lanes.ParseMode(laneConfig.Mode),
+					decider,
+					collectSources(laneConfig, deviceByID),
+					laneConfig.Scenario.Settings.QueueDepth,
+				)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+
+				result[lane.ID] = lane
+
+				for _, deviceID := range laneConfig.Devices {
+					barrierLane[deviceID] = lane
+				}
+
+				for _, deviceID := range laneConfig.Devices {
+					device, ok := deviceByID[deviceID]
+					if !ok || device.ExternalID == "" {
+						continue
+					}
+					key := device.Type + ":" + device.ExternalID
+					if existing, exists := triggerIndex[key]; exists {
+						return nil, nil, nil, fmt.Errorf(
+							"источник %q уже привязан к линии %q, повторно у линии %q",
+							key, existing.Lane.ID, lane.ID,
+						)
+					}
+					triggerIndex[key] = lanes.TriggerTarget{
+						Lane:      lane,
+						Direction: device.Direction,
+					}
 				}
 
 			default:
@@ -215,6 +285,35 @@ func buildLanes(
 	}
 
 	return result, barrierLane, triggerIndex, nil
+}
+
+func collectSources(
+	laneConfig config.LaneConfig,
+	deviceByID map[string]config.DeviceConfig,
+) []*devices.Source {
+	var sources []*devices.Source
+
+	for _, deviceID := range laneConfig.Devices {
+		device, ok := deviceByID[deviceID]
+		if !ok {
+			continue
+		}
+
+		switch device.Type {
+		case config.DeviceTypeCamera,
+			config.DeviceTypeKeypad,
+			config.DeviceTypeCard:
+			sources = append(sources, devices.NewSource(
+				device.ID,
+				device.Name,
+				device.Type,
+				device.ExternalID,
+				device.Direction,
+			))
+		}
+	}
+
+	return sources
 }
 
 func buildCheckpoints(
