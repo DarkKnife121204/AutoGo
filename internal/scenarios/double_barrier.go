@@ -2,6 +2,7 @@ package scenarios
 
 import (
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -97,7 +98,17 @@ func (d *DoubleBarrier) Begin(direction string) error {
 	inbound := d.inbound()
 	d.mu.Unlock()
 
-	return d.startBarrier(inbound)
+	log.Printf(
+		"[gate] Begin: direction=%s inbound=%s",
+		direction, inbound.ID,
+	)
+
+	err := d.startBarrier(inbound)
+	if err != nil {
+		log.Printf("[gate] Begin startBarrier error: %v", err)
+	}
+
+	return err
 }
 
 func (d *DoubleBarrier) Confirm() error {
@@ -115,6 +126,8 @@ func (d *DoubleBarrier) Confirm() error {
 	d.startedAt = time.Now()
 	outbound := d.outbound()
 	d.mu.Unlock()
+
+	log.Printf("[gate] Confirm: outbound=%s", outbound.ID)
 
 	return d.startBarrier(outbound)
 }
@@ -134,6 +147,8 @@ func (d *DoubleBarrier) Reject() error {
 	d.startedAt = time.Now()
 	inbound := d.inbound()
 	d.mu.Unlock()
+
+	log.Printf("[gate] Reject: inbound=%s", inbound.ID)
 
 	return d.startBarrier(inbound)
 }

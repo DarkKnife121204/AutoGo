@@ -2,6 +2,7 @@ package scenarios
 
 import (
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -71,6 +72,8 @@ func (s *SingleBarrier) Begin(direction string) error {
 	s.stage = stageStarting
 	s.startedAt = time.Now()
 	s.mu.Unlock()
+
+	log.Printf("[single] Begin: direction=%s barrier=%s", direction, s.barrier.ID)
 
 	if direction == directionReverse {
 		return s.barrier.StartReverse()

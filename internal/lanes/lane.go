@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -32,6 +33,7 @@ type Lane struct {
 	mu            sync.Mutex
 	mode          Mode
 	activeVehicle *VehicleContext
+	lastState     lanestatus.State
 	pending       []*VehicleContext
 	queue         []*VehicleContext
 	queueDepth    int
@@ -91,6 +93,8 @@ func (l *Lane) Start() error {
 
 	l.mode = ModeAutomatic
 
+	log.Printf("[lane %s] mode -> automatic", l.ID)
+
 	return nil
 }
 
@@ -100,6 +104,8 @@ func (l *Lane) Stop() error {
 
 	l.mode = ModeManual
 
+	log.Printf("[lane %s] mode -> manual", l.ID)
+
 	return nil
 }
 
@@ -108,11 +114,17 @@ func (l *Lane) Reset() error {
 }
 
 func (l *Lane) Confirm() error {
-	return l.Scenario.Confirm()
+	err := l.Scenario.Confirm()
+	l.logStateChange()
+
+	return err
 }
 
 func (l *Lane) Reject() error {
-	return l.Scenario.Reject()
+	err := l.Scenario.Reject()
+	l.logStateChange()
+
+	return err
 }
 
 func (l *Lane) Trigger(
@@ -120,6 +132,11 @@ func (l *Lane) Trigger(
 	value string,
 	direction string,
 ) error {
+	log.Printf(
+		"[lane %s] trigger: source=%s value=%s direction=%s",
+		l.ID, source, value, direction,
+	)
+
 	l.mu.Lock()
 
 	if l.mode != ModeAutomatic {
@@ -146,7 +163,16 @@ func (l *Lane) Trigger(
 		l.activeVehicle = vehicle
 		l.mu.Unlock()
 
+		log.Printf(
+			"[lane %s] begin (immediate): value=%s direction=%s",
+			l.ID, vehicle.Value, vehicle.Direction,
+		)
+
 		if err := l.Scenario.Begin(vehicle.Direction); err != nil {
+			log.Printf(
+				"[lane %s] begin (immediate) FAILED: value=%s error=%v",
+				l.ID, vehicle.Value, err,
+			)
 			l.clearVehicle(vehicle)
 
 			return err
@@ -185,11 +211,21 @@ func (l *Lane) Trigger(
 		l.queue = append(l.queue, vehicle)
 		l.mu.Unlock()
 
+		log.Printf(
+			"[lane %s] queued (immediate): value=%s",
+			l.ID, vehicle.Value,
+		)
+
 		return nil
 	}
 
 	l.pending = append(l.pending, vehicle)
 	l.mu.Unlock()
+
+	log.Printf(
+		"[lane %s] pending (awaiting decision): value=%s",
+		l.ID, vehicle.Value,
+	)
 
 	go l.decidePending(vehicle)
 
@@ -266,6 +302,11 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 	if !allowed {
 		l.mu.Unlock()
 
+		log.Printf(
+			"[lane %s] queue decision DENY: value=%s",
+			l.ID, vehicle.Value,
+		)
+
 		return
 	}
 
@@ -274,7 +315,16 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 	next := l.takeQueueHeadLocked()
 	l.mu.Unlock()
 
+	log.Printf(
+		"[lane %s] queue decision ALLOW: value=%s",
+		l.ID, vehicle.Value,
+	)
+
 	if next != nil {
+		log.Printf(
+			"[lane %s] activating from queue: value=%s",
+			l.ID, next.Value,
+		)
 		l.beginVehicle(next)
 	}
 }
@@ -302,9 +352,23 @@ func (l *Lane) takeQueueHeadLocked() *VehicleContext {
 }
 
 func (l *Lane) beginVehicle(vehicle *VehicleContext) {
+	log.Printf(
+		"[lane %s] begin: value=%s direction=%s",
+		l.ID, vehicle.Value, vehicle.Direction,
+	)
+
 	if err := l.Scenario.Begin(vehicle.Direction); err != nil {
+		log.Printf(
+			"[lane %s] begin FAILED: value=%s error=%v",
+			l.ID, vehicle.Value, err,
+		)
+
 		l.clearVehicle(vehicle)
+
+		return
 	}
+
+	l.logStateChange()
 }
 
 func (l *Lane) decideAsync(vehicle *VehicleContext) {
@@ -327,9 +391,18 @@ func (l *Lane) applyDecision(
 	vehicle *VehicleContext,
 	allowed bool,
 ) {
+	log.Printf(
+		"[lane %s] decision: value=%s allowed=%v",
+		l.ID, vehicle.Value, allowed,
+	)
+
 	l.mu.Lock()
 
 	if l.activeVehicle != vehicle || !vehicle.Waiting {
+		log.Printf(
+			"[lane %s] decision IGNORED (stale): value=%s",
+			l.ID, vehicle.Value,
+		)
 		l.mu.Unlock()
 
 		return
@@ -364,7 +437,16 @@ func (l *Lane) clearVehicle(vehicle *VehicleContext) {
 	next := l.takeQueueHeadLocked()
 	l.mu.Unlock()
 
+	log.Printf(
+		"[lane %s] passage finished: value=%s",
+		l.ID, vehicle.Value,
+	)
+
 	if next != nil {
+		log.Printf(
+			"[lane %s] activating from queue: value=%s",
+			l.ID, next.Value,
+		)
 		l.beginVehicle(next)
 	}
 }
@@ -372,6 +454,7 @@ func (l *Lane) clearVehicle(vehicle *VehicleContext) {
 func (l *Lane) Status() (lanestatus.LaneStatus, error) {
 	snapshot, err := l.Scenario.Snapshot()
 	if err != nil {
+		log.Printf("[lane %s] snapshot error: %v", l.ID, err)
 		return lanestatus.LaneStatus{}, err
 	}
 
@@ -513,10 +596,46 @@ func (l *Lane) poll() {
 
 	done, err := l.Scenario.Advance()
 	if err != nil {
+		log.Printf("[lane %s] poll advance error: %v", l.ID, err)
+
 		return
 	}
 
 	if done {
 		l.clearVehicle(vehicle)
 	}
+
+	l.logStateChange()
+}
+
+func (l *Lane) logStateChange() {
+	snapshot, err := l.Scenario.Snapshot()
+	if err != nil {
+		return
+	}
+
+	l.mu.Lock()
+	state := deriveState(snapshot, l.mode, l.activeVehicle)
+
+	if state != l.lastState {
+		prev := l.lastState
+		l.lastState = state
+		l.mu.Unlock()
+
+		log.Printf(
+			"[lane %s] state %s -> %s",
+			l.ID, stateOrInitial(prev), state,
+		)
+
+		return
+	}
+	l.mu.Unlock()
+}
+
+func stateOrInitial(s lanestatus.State) lanestatus.State {
+	if s == "" {
+		return "—"
+	}
+
+	return s
 }

@@ -12,6 +12,7 @@ import (
 
 	"AutoGo/internal/config"
 	"AutoGo/internal/httpapi"
+	"AutoGo/internal/logging"
 	"AutoGo/internal/runtime"
 )
 
@@ -20,6 +21,12 @@ const (
 )
 
 func main() {
+	closeLog, err := logging.Setup()
+	if err != nil {
+		log.Fatalf("не удалось настроить логирование: %v", err)
+	}
+	defer closeLog()
+
 	configPath := getEnv(
 		"AUTOGO_CONFIG_PATH",
 		"config/site.yaml",

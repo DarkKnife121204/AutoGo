@@ -2,16 +2,15 @@ package runtime
 
 import (
 	"AutoGo/internal/access"
-	"errors"
-	"fmt"
-	"log"
-
 	"AutoGo/internal/checkpoints"
 	"AutoGo/internal/config"
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanes"
 	"AutoGo/internal/plcclient"
 	"AutoGo/internal/scenarios"
+	"errors"
+	"fmt"
+	"log"
 )
 
 func buildPLCClients(

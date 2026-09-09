@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"log"
 	"net/http"
+	"time"
 
 	"AutoGo/internal/checkpoints"
 	"AutoGo/internal/devices"
@@ -43,5 +45,41 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/plate", a.plateTrigger)
 	mux.HandleFunc("/code", a.codeTrigger)
 
-	return mux
+	return logRequests(mux)
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		rec := &statusRecorder{
+			ResponseWriter: w,
+			status:         http.StatusOK,
+		}
+
+		next.ServeHTTP(rec, r)
+
+		target := r.URL.Path
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+
+		log.Printf(
+			"HTTP %s %s -> %d (%s)",
+			r.Method,
+			target,
+			rec.status,
+			time.Since(start).Round(time.Millisecond),
+		)
+	})
 }

@@ -3,6 +3,7 @@ package plcclient
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +64,8 @@ func (c *Client) Close() error {
 		return fmt.Errorf("закрытие соединения с PLC: %w", err)
 	}
 
+	log.Printf("[plc %s] подключено", c.config.Address)
+
 	return nil
 }
 
@@ -112,6 +115,8 @@ func (c *Client) reconnectLocked() error {
 		return fmt.Errorf("повторное подключение к PLC: %w", err)
 	}
 
+	log.Printf("[plc %s] переподключение...", c.config.Address)
+
 	return nil
 }
 
@@ -140,6 +145,11 @@ func (c *Client) readRegisters(
 	if firstErr == nil {
 		return registers, nil
 	}
+
+	log.Printf(
+		"[plc %s] ошибка чтения HR%d-HR%d, переподключаюсь: %v",
+		c.config.Address, address, address+quantity-1, firstErr,
+	)
 
 	if err := c.reconnectLocked(); err != nil {
 		return nil, fmt.Errorf(
@@ -189,6 +199,11 @@ func (c *Client) writeRegisters(
 	}
 
 	if err := c.client.WriteRegisters(address, values); err != nil {
+		log.Printf(
+			"[plc %s] ошибка записи HR%d, переподключаюсь: %v",
+			c.config.Address, address, err,
+		)
+
 		reconnectErr := c.reconnectLocked()
 
 		if reconnectErr != nil {

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -156,6 +157,10 @@ func (a *API) barrierCommand(
 
 	if lane, ok := a.barrierLane[barrier.ID]; ok &&
 		lane.Mode() == lanes.ModeAutomatic {
+		log.Printf(
+			"[barrier %s] command rejected (interlock): lane in automatic",
+			barrier.ID,
+		)
 		writeJSON(
 			w,
 			http.StatusConflict,
@@ -225,6 +230,10 @@ func (a *API) barrierCommand(
 	}
 
 	if err != nil {
+		log.Printf(
+			"[barrier %s] command %s FAILED: %v",
+			barrier.ID, command, err,
+		)
 		writeJSON(
 			w,
 			http.StatusServiceUnavailable,
@@ -236,6 +245,8 @@ func (a *API) barrierCommand(
 
 		return
 	}
+
+	log.Printf("[barrier %s] command %s accepted", barrier.ID, command)
 
 	writeJSON(
 		w,

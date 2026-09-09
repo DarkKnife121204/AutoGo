@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -152,6 +153,8 @@ func (a *API) laneCommand(
 		strings.TrimSpace(request.Command),
 	)
 
+	log.Printf("[lane %s] command: %s", lane.ID, command)
+
 	var err error
 
 	switch command {
@@ -185,6 +188,7 @@ func (a *API) laneCommand(
 	}
 
 	if err != nil {
+		log.Printf("[lane %s] command %s FAILED: %v", lane.ID, command, err)
 		writeJSON(
 			w,
 			http.StatusServiceUnavailable,

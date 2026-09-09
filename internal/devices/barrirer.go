@@ -2,6 +2,8 @@ package devices
 
 import (
 	"fmt"
+	"log"
+	"sync"
 
 	"AutoGo/internal/plcclient"
 )
@@ -11,6 +13,9 @@ type Barrier struct {
 	Name         string
 	ControllerID string
 	PLC          *plcclient.Client
+
+	mu        sync.Mutex
+	lastState string
 }
 
 func NewBarrier(
@@ -59,5 +64,33 @@ func (b *Barrier) Reset() error {
 }
 
 func (b *Barrier) Status() (plcclient.Status, error) {
-	return b.PLC.Status()
+	status, err := b.PLC.Status()
+	if err != nil {
+		return status, err
+	}
+
+	b.logStateChange(status.State.String())
+
+	return status, nil
+}
+
+func (b *Barrier) logStateChange(state string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if state == b.lastState {
+		return
+	}
+
+	prev := b.lastState
+	if prev == "" {
+		prev = "—"
+	}
+
+	b.lastState = state
+
+	log.Printf(
+		"[barrier %s] %s -> %s",
+		b.ID, prev, state,
+	)
 }

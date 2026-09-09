@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -120,6 +121,7 @@ func (a *API) dispatchTrigger(
 ) {
 	target, exists := a.triggerIndex[indexKey]
 	if !exists {
+		log.Printf("trigger unrouted: key=%s value=%s", indexKey, value)
 		writeJSON(
 			w,
 			http.StatusNotFound,
@@ -133,6 +135,10 @@ func (a *API) dispatchTrigger(
 	}
 
 	if err := target.Lane.Trigger(source, value, target.Direction); err != nil {
+		log.Printf(
+			"trigger rejected: lane=%s value=%s error=%v",
+			target.Lane.ID, value, err,
+		)
 		writeJSON(
 			w,
 			http.StatusConflict,

@@ -22,7 +22,6 @@ const (
 
 	ReleaseModeImmediate            = "immediate"
 	ReleaseModeExternalConfirmation = "external_confirmation"
-	ReleaseModeManualOperator       = "manual_operator"
 
 	DirectionNormal  = "normal"
 	DirectionReverse = "reverse"
@@ -597,15 +596,6 @@ func validateReleaseMode(
 	switch strings.TrimSpace(releaseMode) {
 	case "", ReleaseModeImmediate, ReleaseModeExternalConfirmation:
 		return nil
-
-	case ReleaseModeManualOperator:
-		return []error{
-			fmt.Errorf(
-				"%s.settings.release_mode %q пока не реализован",
-				path,
-				releaseMode,
-			),
-		}
 
 	default:
 		return []error{
