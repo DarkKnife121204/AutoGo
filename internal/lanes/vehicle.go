@@ -12,7 +12,10 @@ type VehicleContext struct {
 	Value     string
 	Source    string
 	Direction string
-	Waiting   bool
+
+	Waiting  bool
+	Approved bool
+
 	StartedAt time.Time
 
 	source scenarios.TriggerSource

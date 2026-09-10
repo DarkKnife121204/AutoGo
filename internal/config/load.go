@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,10 +22,13 @@ func Load(path string) (Config, error) {
 
 	expanded := os.ExpandEnv(string(data))
 
-	if err := yaml.Unmarshal(
-		[]byte(expanded),
-		&config,
-	); err != nil {
+	decoder := yaml.NewDecoder(
+		strings.NewReader(expanded),
+	)
+
+	decoder.KnownFields(true)
+
+	if err := decoder.Decode(&config); err != nil {
 		return Config{}, fmt.Errorf(
 			"разбор YAML-конфигурации %q: %w",
 			path,

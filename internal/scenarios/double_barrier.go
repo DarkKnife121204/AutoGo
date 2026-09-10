@@ -92,65 +92,80 @@ func (d *DoubleBarrier) startBarrier(b *devices.Barrier) error {
 
 func (d *DoubleBarrier) Begin(direction string) error {
 	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if err := d.waitReadyForStart(); err != nil {
+		return err
+	}
+
 	d.currentDirection = direction
-	d.stage = gateEntry
-	d.startedAt = time.Now()
 	inbound := d.inbound()
-	d.mu.Unlock()
 
 	log.Printf(
 		"[gate] Begin: direction=%s inbound=%s",
 		direction, inbound.ID,
 	)
 
-	err := d.startBarrier(inbound)
-	if err != nil {
+	if err := d.startBarrier(inbound); err != nil {
+		d.currentDirection = ""
+
 		log.Printf("[gate] Begin startBarrier error: %v", err)
+
+		return err
 	}
 
-	return err
+	d.stage = gateEntry
+	d.startedAt = time.Now()
+
+	return nil
 }
 
 func (d *DoubleBarrier) Confirm() error {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	if d.stage != gateConfirm {
-		d.mu.Unlock()
-
 		return errors.New(
 			"подтверждение недоступно: машина не в шлюзе",
 		)
 	}
 
-	d.stage = gateExit
-	d.startedAt = time.Now()
 	outbound := d.outbound()
-	d.mu.Unlock()
 
 	log.Printf("[gate] Confirm: outbound=%s", outbound.ID)
 
-	return d.startBarrier(outbound)
+	if err := d.startBarrier(outbound); err != nil {
+		return err
+	}
+
+	d.stage = gateExit
+	d.startedAt = time.Now()
+
+	return nil
 }
 
 func (d *DoubleBarrier) Reject() error {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	if d.stage != gateConfirm {
-		d.mu.Unlock()
-
 		return errors.New(
 			"отклонение недоступно: машина не в шлюзе",
 		)
 	}
 
-	d.stage = gateReject
-	d.startedAt = time.Now()
 	inbound := d.inbound()
-	d.mu.Unlock()
 
 	log.Printf("[gate] Reject: inbound=%s", inbound.ID)
 
-	return d.startBarrier(inbound)
+	if err := d.startBarrier(inbound); err != nil {
+		return err
+	}
+
+	d.stage = gateReject
+	d.startedAt = time.Now()
+
+	return nil
 }
 
 func (d *DoubleBarrier) Advance() (bool, error) {
@@ -229,11 +244,10 @@ func (d *DoubleBarrier) StartReverse() error {
 }
 
 func (d *DoubleBarrier) Stop() error {
-	if err := d.entry.Stop(); err != nil {
-		return err
-	}
+	entryErr := d.entry.Stop()
+	exitErr := d.exit.Stop()
 
-	return d.exit.Stop()
+	return errors.Join(entryErr, exitErr)
 }
 
 func (d *DoubleBarrier) Open() error {
@@ -245,11 +259,49 @@ func (d *DoubleBarrier) Close() error {
 }
 
 func (d *DoubleBarrier) Reset() error {
-	if err := d.entry.Reset(); err != nil {
+	entryResult := make(chan error, 1)
+	exitResult := make(chan error, 1)
+
+	go func() {
+		entryResult <- d.entry.Reset()
+	}()
+
+	go func() {
+		exitResult <- d.exit.Reset()
+	}()
+
+	entryErr := <-entryResult
+	exitErr := <-exitResult
+
+	if err := errors.Join(entryErr, exitErr); err != nil {
 		return err
 	}
 
-	return d.exit.Reset()
+	d.mu.Lock()
+	d.stage = gateIdle
+	d.startedAt = time.Time{}
+	d.currentDirection = ""
+	d.mu.Unlock()
+
+	return nil
+}
+
+func (d *DoubleBarrier) waitReadyForStart() error {
+	entryResult := make(chan error, 1)
+	exitResult := make(chan error, 1)
+
+	go func() {
+		entryResult <- d.entry.WaitReadyForStart()
+	}()
+
+	go func() {
+		exitResult <- d.exit.WaitReadyForStart()
+	}()
+
+	return errors.Join(
+		<-entryResult,
+		<-exitResult,
+	)
 }
 
 func (d *DoubleBarrier) Snapshot() (lanestatus.Snapshot, error) {

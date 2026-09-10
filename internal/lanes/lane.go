@@ -89,11 +89,48 @@ func (l *Lane) Mode() Mode {
 
 func (l *Lane) Start() error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 
 	l.mode = ModeAutomatic
 
+	current := l.activeVehicle
+
+	var next *VehicleContext
+
+	if current == nil {
+		next = l.takeQueueHeadLocked()
+	}
+
+	resume := current != nil &&
+		current.Waiting &&
+		current.Approved
+
+	if resume {
+		current.Waiting = false
+	}
+
+	l.mu.Unlock()
+
 	log.Printf("[lane %s] mode -> automatic", l.ID)
+
+	if resume {
+		log.Printf(
+			"[lane %s] activating approved vehicle after start: value=%s",
+			l.ID, current.Value,
+		)
+
+		l.beginVehicle(current)
+
+		return nil
+	}
+
+	if next != nil {
+		log.Printf(
+			"[lane %s] activating from queue after start: value=%s",
+			l.ID, next.Value,
+		)
+
+		l.beginVehicle(next)
+	}
 
 	return nil
 }
@@ -110,10 +147,48 @@ func (l *Lane) Stop() error {
 }
 
 func (l *Lane) Reset() error {
-	return l.Scenario.Reset()
+	l.mu.Lock()
+
+	if err := l.Scenario.Reset(); err != nil {
+		l.mu.Unlock()
+		return err
+	}
+
+	l.activeVehicle = nil
+
+	var next *VehicleContext
+
+	if l.mode == ModeAutomatic {
+		next = l.takeQueueHeadLocked()
+	}
+
+	l.mu.Unlock()
+
+	if next != nil {
+		log.Printf(
+			"[lane %s] activating from queue after reset: value=%s",
+			l.ID, next.Value,
+		)
+
+		l.beginVehicle(next)
+	}
+
+	return nil
 }
 
 func (l *Lane) Confirm() error {
+	l.mu.Lock()
+
+	if l.mode != ModeAutomatic {
+		l.mu.Unlock()
+
+		return errors.New(
+			"подтверждение недоступно: линия не в автоматическом режиме",
+		)
+	}
+
+	l.mu.Unlock()
+
 	err := l.Scenario.Confirm()
 	l.logStateChange()
 
@@ -121,6 +196,18 @@ func (l *Lane) Confirm() error {
 }
 
 func (l *Lane) Reject() error {
+	l.mu.Lock()
+
+	if l.mode != ModeAutomatic {
+		l.mu.Unlock()
+
+		return errors.New(
+			"отклонение недоступно: линия не в автоматическом режиме",
+		)
+	}
+
+	l.mu.Unlock()
+
 	err := l.Scenario.Reject()
 	l.logStateChange()
 
@@ -297,9 +384,11 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 
 	l.mu.Lock()
 
-	l.removePendingLocked(vehicle)
-
 	if !allowed {
+		l.removePendingLocked(vehicle)
+		l.promoteApprovedPendingLocked()
+
+		next := l.takeQueueHeadLocked()
 		l.mu.Unlock()
 
 		log.Printf(
@@ -307,10 +396,16 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 			l.ID, vehicle.Value,
 		)
 
+		if next != nil {
+			l.beginVehicle(next)
+		}
+
 		return
 	}
 
-	l.queue = append(l.queue, vehicle)
+	vehicle.Approved = true
+
+	l.promoteApprovedPendingLocked()
 
 	next := l.takeQueueHeadLocked()
 	l.mu.Unlock()
@@ -325,7 +420,17 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 			"[lane %s] activating from queue: value=%s",
 			l.ID, next.Value,
 		)
+
 		l.beginVehicle(next)
+	}
+}
+
+func (l *Lane) promoteApprovedPendingLocked() {
+	for len(l.pending) > 0 && l.pending[0].Approved {
+		vehicle := l.pending[0]
+		l.pending = l.pending[1:]
+
+		l.queue = append(l.queue, vehicle)
 	}
 }
 
@@ -340,6 +445,10 @@ func (l *Lane) removePendingLocked(vehicle *VehicleContext) {
 }
 
 func (l *Lane) takeQueueHeadLocked() *VehicleContext {
+	if l.mode != ModeAutomatic {
+		return nil
+	}
+
 	if l.activeVehicle != nil || len(l.queue) == 0 {
 		return nil
 	}
@@ -417,6 +526,19 @@ func (l *Lane) applyDecision(
 		if next != nil {
 			l.beginVehicle(next)
 		}
+
+		return
+	}
+
+	vehicle.Approved = true
+
+	if l.mode != ModeAutomatic {
+		l.mu.Unlock()
+
+		log.Printf(
+			"[lane %s] decision ALLOW stored, waiting for automatic mode: value=%s",
+			l.ID, vehicle.Value,
+		)
 
 		return
 	}
@@ -586,8 +708,15 @@ func (l *Lane) StopPoller() {
 
 func (l *Lane) poll() {
 	l.mu.Lock()
+
+	if l.mode != ModeAutomatic {
+		l.mu.Unlock()
+		return
+	}
+
 	vehicle := l.activeVehicle
 	physical := vehicle != nil && !vehicle.Waiting
+
 	l.mu.Unlock()
 
 	if !physical {

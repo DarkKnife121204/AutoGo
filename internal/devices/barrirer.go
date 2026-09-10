@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
+	"AutoGo/internal/plc"
 	"AutoGo/internal/plcclient"
 )
 
@@ -61,6 +63,53 @@ func (b *Barrier) Close() error {
 
 func (b *Barrier) Reset() error {
 	return b.PLC.Reset()
+}
+
+func (b *Barrier) WaitReadyForStart() error {
+	const (
+		timeout      = 5 * time.Second
+		pollInterval = 100 * time.Millisecond
+	)
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		status, err := b.Status()
+		if err != nil {
+			return fmt.Errorf(
+				"проверка готовности шлагбаума %q: %w",
+				b.ID,
+				err,
+			)
+		}
+
+		if status.HasAlarm() {
+			return fmt.Errorf(
+				"шлагбаум %q не готов: alarm=%d",
+				b.ID,
+				status.Alarm,
+			)
+		}
+
+		if status.State == plc.StateClosed {
+			return nil
+		}
+
+		select {
+		case <-ticker.C:
+
+		case <-timer.C:
+			return fmt.Errorf(
+				"таймаут ожидания готовности шлагбаума %q: state=%s",
+				b.ID,
+				status.State,
+			)
+		}
+	}
 }
 
 func (b *Barrier) Status() (plcclient.Status, error) {

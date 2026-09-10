@@ -59,6 +59,7 @@ func (c Config) Validate() error {
 
 	controllerIDs := make(map[string]struct{})
 	deviceIDs := make(map[string]struct{})
+	deviceTypes := make(map[string]string)
 	checkpointIDs := make(map[string]struct{})
 	laneIDs := make(map[string]struct{})
 
@@ -111,6 +112,7 @@ func (c Config) Validate() error {
 				err,
 			)
 		}
+		deviceTypes[strings.TrimSpace(device.ID)] = device.Type
 	}
 
 	for checkpointIndex, checkpoint := range c.Checkpoints {
@@ -162,6 +164,7 @@ func (c Config) Validate() error {
 				lanePath,
 				lane,
 				deviceIDs,
+				deviceTypes,
 			); err != nil {
 				validationErrors = append(
 					validationErrors,
@@ -348,6 +351,7 @@ func validateLane(
 	path string,
 	lane LaneConfig,
 	deviceIDs map[string]struct{},
+	deviceTypes map[string]string,
 ) error {
 	var validationErrors []error
 
@@ -430,6 +434,7 @@ func validateLane(
 		path+".scenario",
 		lane.Scenario,
 		laneDeviceIDs,
+		deviceTypes,
 	); err != nil {
 		validationErrors = append(
 			validationErrors,
@@ -444,6 +449,7 @@ func validateScenario(
 	path string,
 	scenario ScenarioConfig,
 	laneDeviceIDs map[string]struct{},
+	deviceTypes map[string]string,
 ) error {
 	var validationErrors []error
 
@@ -455,6 +461,7 @@ func validateScenario(
 				path,
 				scenario.Settings,
 				laneDeviceIDs,
+				deviceTypes,
 			)...,
 		)
 
@@ -465,10 +472,9 @@ func validateScenario(
 				path,
 				scenario.Settings,
 				laneDeviceIDs,
+				deviceTypes,
 			)...,
 		)
-
-		return errors.Join(validationErrors...)
 
 	default:
 		validationErrors = append(
@@ -505,6 +511,7 @@ func validateSingleBarrierSettings(
 	path string,
 	settings ScenarioSettings,
 	laneDeviceIDs map[string]struct{},
+	deviceTypes map[string]string,
 ) []error {
 	var validationErrors []error
 
@@ -533,6 +540,18 @@ func validateSingleBarrierSettings(
 		)
 	}
 
+	if deviceTypes[barrierID] != DeviceTypeBarrier {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.settings.barrier должен ссылаться на устройство типа barrier, %q имеет тип %q",
+				path,
+				barrierID,
+				deviceTypes[barrierID],
+			),
+		)
+	}
+
 	return validationErrors
 }
 
@@ -540,6 +559,7 @@ func validateDoubleBarrierSettings(
 	path string,
 	settings ScenarioSettings,
 	laneDeviceIDs map[string]struct{},
+	deviceTypes map[string]string,
 ) []error {
 	var validationErrors []error
 
@@ -586,6 +606,21 @@ func validateDoubleBarrierSettings(
 		)
 	}
 
+	if entry != "" {
+		if _, exists := laneDeviceIDs[entry]; exists &&
+			deviceTypes[entry] != DeviceTypeBarrier {
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf(
+					"%s.settings.entry_barrier должен ссылаться на устройство типа barrier, %q имеет тип %q",
+					path,
+					entry,
+					deviceTypes[entry],
+				),
+			)
+		}
+	}
+
 	return validationErrors
 }
 
@@ -603,25 +638,6 @@ func validateReleaseMode(
 				"%s.settings.release_mode содержит неизвестное значение %q",
 				path,
 				releaseMode,
-			),
-		}
-	}
-}
-
-func validateDirection(
-	path string,
-	direction string,
-) []error {
-	switch strings.TrimSpace(direction) {
-	case "", DirectionNormal, DirectionReverse:
-		return nil
-
-	default:
-		return []error{
-			fmt.Errorf(
-				"%s.settings.direction содержит неизвестное значение %q",
-				path,
-				direction,
 			),
 		}
 	}

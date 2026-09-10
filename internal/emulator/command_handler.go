@@ -29,6 +29,8 @@ func (e *Emulator) commandLoop() {
 			continue
 		}
 
+		e.handleCommand(command)
+
 		if err := e.store.WriteInt32(
 			plc.RegisterInCommand,
 			int32(plc.CommandNone),
@@ -36,8 +38,6 @@ func (e *Emulator) commandLoop() {
 			log.Printf("ошибка очистки команды: %v", err)
 			continue
 		}
-
-		e.handleCommand(command)
 	}
 }
 

@@ -174,9 +174,16 @@ func buildLanes(
 
 				result[lane.ID] = lane
 
-				for _, deviceID := range laneConfig.Devices {
-					barrierLane[deviceID] = lane
+				if existing, exists := barrierLane[barrierID]; exists {
+					return nil, nil, nil, fmt.Errorf(
+						"шлагбаум %q уже привязан к линии %q, повторно у линии %q",
+						barrierID,
+						existing.ID,
+						lane.ID,
+					)
 				}
+
+				barrierLane[barrierID] = lane
 
 				for _, deviceID := range laneConfig.Devices {
 					device, ok := deviceByID[deviceID]
@@ -245,8 +252,17 @@ func buildLanes(
 
 				result[lane.ID] = lane
 
-				for _, deviceID := range laneConfig.Devices {
-					barrierLane[deviceID] = lane
+				for _, barrierID := range []string{entryID, exitID} {
+					if existing, exists := barrierLane[barrierID]; exists {
+						return nil, nil, nil, fmt.Errorf(
+							"шлагбаум %q уже привязан к линии %q, повторно у линии %q",
+							barrierID,
+							existing.ID,
+							lane.ID,
+						)
+					}
+
+					barrierLane[barrierID] = lane
 				}
 
 				for _, deviceID := range laneConfig.Devices {

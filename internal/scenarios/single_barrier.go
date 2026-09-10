@@ -69,17 +69,33 @@ func (s *SingleBarrier) ReleaseMode() string {
 
 func (s *SingleBarrier) Begin(direction string) error {
 	s.mu.Lock()
-	s.stage = stageStarting
-	s.startedAt = time.Now()
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
-	log.Printf("[single] Begin: direction=%s barrier=%s", direction, s.barrier.ID)
+	log.Printf(
+		"[single] Begin: direction=%s barrier=%s",
+		direction, s.barrier.ID,
+	)
 
-	if direction == directionReverse {
-		return s.barrier.StartReverse()
+	if err := s.barrier.WaitReadyForStart(); err != nil {
+		return err
 	}
 
-	return s.barrier.Start()
+	var err error
+
+	if direction == directionReverse {
+		err = s.barrier.StartReverse()
+	} else {
+		err = s.barrier.Start()
+	}
+
+	if err != nil {
+		return err
+	}
+
+	s.stage = stageStarting
+	s.startedAt = time.Now()
+
+	return nil
 }
 
 func (s *SingleBarrier) Advance() (bool, error) {
@@ -145,7 +161,16 @@ func (s *SingleBarrier) Close() error {
 }
 
 func (s *SingleBarrier) Reset() error {
-	return s.barrier.Reset()
+	if err := s.barrier.Reset(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.stage = stageIdle
+	s.startedAt = time.Time{}
+	s.mu.Unlock()
+
+	return nil
 }
 
 func (s *SingleBarrier) Confirm() error {

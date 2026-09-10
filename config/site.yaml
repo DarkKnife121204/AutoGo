@@ -93,5 +93,4 @@ checkpoints:
             entry_barrier: barrier-2
             exit_barrier: barrier-3
             release_mode: external_confirmation
-            direction: normal
             queue_depth: 2
