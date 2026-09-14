@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 
@@ -42,7 +41,7 @@ func (a *API) plateTrigger(
 		return
 	}
 
-	a.dispatchTrigger(
+	a.dispatchPlateTrigger(
 		w,
 		"camera:"+cam,
 		scenarios.TriggerSourceCamera,
@@ -105,7 +104,7 @@ func (a *API) codeTrigger(
 		return
 	}
 
-	a.dispatchTrigger(
+	a.dispatchKeyCodeTrigger(
 		w,
 		"keypad:"+sender,
 		scenarios.TriggerSourceCode,
@@ -113,50 +112,68 @@ func (a *API) codeTrigger(
 	)
 }
 
-func (a *API) dispatchTrigger(
+func (a *API) dispatchPlateTrigger(
 	w http.ResponseWriter,
 	indexKey string,
 	source scenarios.TriggerSource,
-	value string,
+	plate string,
 ) {
 	target, exists := a.triggerIndex[indexKey]
 	if !exists {
-		log.Printf("trigger unrouted: key=%s value=%s", indexKey, value)
-		writeJSON(
-			w,
-			http.StatusNotFound,
-			map[string]string{
-				"status": "error",
-				"error":  "источник не привязан ни к одной линии: " + indexKey,
-			},
-		)
-
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"status": "error",
+			"error":  "источник не привязан ни к одной линии: " + indexKey,
+		})
 		return
 	}
 
-	if err := target.Lane.Trigger(source, value, target.Direction); err != nil {
-		log.Printf(
-			"trigger rejected: lane=%s value=%s error=%v",
-			target.Lane.ID, value, err,
-		)
-		writeJSON(
-			w,
-			http.StatusConflict,
-			map[string]string{
-				"status": "error",
-				"error":  err.Error(),
-			},
-		)
-
+	if err := target.Lane.TriggerPlate(
+		source,
+		plate,
+		target.Direction,
+	); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"status": "error",
+			"error":  err.Error(),
+		})
 		return
 	}
 
-	writeJSON(
-		w,
-		http.StatusAccepted,
-		map[string]string{
-			"status": "accepted",
-			"lane":   target.Lane.ID,
-		},
-	)
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status": "accepted",
+		"lane":   target.Lane.ID,
+	})
+}
+
+func (a *API) dispatchKeyCodeTrigger(
+	w http.ResponseWriter,
+	indexKey string,
+	source scenarios.TriggerSource,
+	keyCode string,
+) {
+	target, exists := a.triggerIndex[indexKey]
+	if !exists {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"status": "error",
+			"error":  "источник не привязан ни к одной линии: " + indexKey,
+		})
+		return
+	}
+
+	if err := target.Lane.TriggerKeyCode(
+		source,
+		keyCode,
+		target.Direction,
+	); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"status": "error",
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status": "accepted",
+		"lane":   target.Lane.ID,
+	})
 }

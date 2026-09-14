@@ -15,10 +15,15 @@ func (d *StubDecider) Decide(
 	_ context.Context,
 	req Request,
 ) (Decision, error) {
-	if strings.EqualFold(strings.TrimSpace(req.Credential), "DENY") {
+	value := req.Plate
+	if value == "" {
+		value = req.KeyCode
+	}
+
+	if strings.EqualFold(strings.TrimSpace(value), "DENY") {
 		return Decision{
 			Allowed: false,
-			Reason:  "отказано заглушкой (credential=DENY)",
+			Reason:  "отказано заглушкой",
 		}, nil
 	}
 

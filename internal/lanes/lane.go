@@ -112,10 +112,12 @@ func (l *Lane) Start() error {
 
 	log.Printf("[lane %s] mode -> automatic", l.ID)
 
+	l.logStateChange()
+
 	if resume {
 		log.Printf(
 			"[lane %s] activating approved vehicle after start: value=%s",
-			l.ID, current.Value,
+			l.ID, current.identity(),
 		)
 
 		l.beginVehicle(current)
@@ -126,7 +128,7 @@ func (l *Lane) Start() error {
 	if next != nil {
 		log.Printf(
 			"[lane %s] activating from queue after start: value=%s",
-			l.ID, next.Value,
+			l.ID, next.identity(),
 		)
 
 		l.beginVehicle(next)
@@ -137,11 +139,12 @@ func (l *Lane) Start() error {
 
 func (l *Lane) Stop() error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	l.mode = ModeManual
+	l.mu.Unlock()
 
 	log.Printf("[lane %s] mode -> manual", l.ID)
+
+	l.logStateChange()
 
 	return nil
 }
@@ -167,7 +170,7 @@ func (l *Lane) Reset() error {
 	if next != nil {
 		log.Printf(
 			"[lane %s] activating from queue after reset: value=%s",
-			l.ID, next.Value,
+			l.ID, next.identity(),
 		)
 
 		l.beginVehicle(next)
@@ -214,28 +217,76 @@ func (l *Lane) Reject() error {
 	return err
 }
 
-func (l *Lane) Trigger(
+func (l *Lane) trigger(
 	source scenarios.TriggerSource,
-	value string,
+	plate string,
+	keyCode string,
 	direction string,
 ) error {
-	log.Printf(
-		"[lane %s] trigger: source=%s value=%s direction=%s",
-		l.ID, source, value, direction,
-	)
-
-	l.mu.Lock()
-
-	if l.mode != ModeAutomatic {
-		l.mu.Unlock()
-
+	if (plate == "") == (keyCode == "") {
 		return errors.New(
-			"линия не в автоматическом режиме",
+			"должен быть указан либо plate, либо key_code",
 		)
 	}
 
+	l.mu.Lock()
+
+	if l.mode == ModeManual {
+		if l.isDuplicateLocked(source, plate, keyCode) {
+			l.mu.Unlock()
+
+			return errors.New(
+				"повторное событие по тому же идентификатору игнорируется",
+			)
+		}
+
+		if l.queueDepth <= 0 {
+			l.mu.Unlock()
+
+			return errors.New(
+				"очередь отключена для линии",
+			)
+		}
+
+		if len(l.pending)+len(l.queue) >= l.queueDepth {
+			l.mu.Unlock()
+
+			return errors.New(
+				"очередь заполнена",
+			)
+		}
+
+		vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
+
+		if l.releaseMode != releaseModeExternalConfirmation {
+			l.queue = append(l.queue, vehicle)
+			l.mu.Unlock()
+
+			log.Printf(
+				"[lane %s] queued in manual: value=%s",
+				l.ID,
+				vehicle.identity(),
+			)
+
+			return nil
+		}
+
+		l.pending = append(l.pending, vehicle)
+		l.mu.Unlock()
+
+		log.Printf(
+			"[lane %s] pending in manual: value=%s",
+			l.ID,
+			vehicle.identity(),
+		)
+
+		go l.decidePending(vehicle)
+
+		return nil
+	}
+
 	if l.activeVehicle == nil {
-		vehicle := l.newVehicleLocked(source, value, direction)
+		vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
 
 		if l.releaseMode == releaseModeExternalConfirmation {
 			vehicle.Waiting = true
@@ -252,13 +303,13 @@ func (l *Lane) Trigger(
 
 		log.Printf(
 			"[lane %s] begin (immediate): value=%s direction=%s",
-			l.ID, vehicle.Value, vehicle.Direction,
+			l.ID, vehicle.identity(), vehicle.Direction,
 		)
 
 		if err := l.Scenario.Begin(vehicle.Direction); err != nil {
 			log.Printf(
 				"[lane %s] begin (immediate) FAILED: value=%s error=%v",
-				l.ID, vehicle.Value, err,
+				l.ID, vehicle.identity(), err,
 			)
 
 			return err
@@ -267,7 +318,7 @@ func (l *Lane) Trigger(
 		return nil
 	}
 
-	if l.isDuplicateLocked(source, value) {
+	if l.isDuplicateLocked(source, plate, keyCode) {
 		l.mu.Unlock()
 
 		return errors.New(
@@ -291,7 +342,7 @@ func (l *Lane) Trigger(
 		)
 	}
 
-	vehicle := l.newVehicleLocked(source, value, direction)
+	vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
 
 	if l.releaseMode != releaseModeExternalConfirmation {
 		l.queue = append(l.queue, vehicle)
@@ -299,7 +350,7 @@ func (l *Lane) Trigger(
 
 		log.Printf(
 			"[lane %s] queued (immediate): value=%s",
-			l.ID, vehicle.Value,
+			l.ID, vehicle.identity(),
 		)
 
 		return nil
@@ -310,7 +361,7 @@ func (l *Lane) Trigger(
 
 	log.Printf(
 		"[lane %s] pending (awaiting decision): value=%s",
-		l.ID, vehicle.Value,
+		l.ID, vehicle.identity(),
 	)
 
 	go l.decidePending(vehicle)
@@ -320,7 +371,8 @@ func (l *Lane) Trigger(
 
 func (l *Lane) newVehicleLocked(
 	source scenarios.TriggerSource,
-	value string,
+	plate string,
+	keyCode string,
 	direction string,
 ) *VehicleContext {
 	if direction == "" {
@@ -329,7 +381,8 @@ func (l *Lane) newVehicleLocked(
 
 	return &VehicleContext{
 		ID:        newVehicleID(),
-		Value:     value,
+		Plate:     plate,
+		KeyCode:   keyCode,
 		Source:    string(source),
 		Direction: direction,
 		StartedAt: time.Now(),
@@ -339,28 +392,27 @@ func (l *Lane) newVehicleLocked(
 
 func (l *Lane) isDuplicateLocked(
 	source scenarios.TriggerSource,
-	value string,
+	plate string,
+	keyCode string,
 ) bool {
-	if value == "" {
-		return false
+	same := func(v *VehicleContext) bool {
+		return v.Source == string(source) &&
+			v.Plate == plate &&
+			v.KeyCode == keyCode
 	}
 
-	src := string(source)
-
-	if l.activeVehicle != nil &&
-		l.activeVehicle.Value == value &&
-		l.activeVehicle.Source == src {
+	if l.activeVehicle != nil && same(l.activeVehicle) {
 		return true
 	}
 
 	for _, v := range l.pending {
-		if v.Value == value && v.Source == src {
+		if same(v) {
 			return true
 		}
 	}
 
 	for _, v := range l.queue {
-		if v.Value == value && v.Source == src {
+		if same(v) {
 			return true
 		}
 	}
@@ -372,10 +424,11 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 	decision, err := l.decider.Decide(
 		context.Background(),
 		access.Request{
-			LaneID:     l.ID,
-			Credential: vehicle.Value,
-			Source:     vehicle.Source,
-			Direction:  vehicle.Direction,
+			LaneID:    l.ID,
+			Plate:     vehicle.Plate,
+			KeyCode:   vehicle.KeyCode,
+			Source:    vehicle.Source,
+			Direction: vehicle.Direction,
 		},
 	)
 
@@ -383,7 +436,7 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 		log.Printf(
 			"[lane %s] queue decision ERROR: value=%s error=%v",
 			l.ID,
-			vehicle.Value,
+			vehicle.identity(),
 			err,
 		)
 
@@ -403,7 +456,7 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 
 		log.Printf(
 			"[lane %s] queue decision DENY: value=%s",
-			l.ID, vehicle.Value,
+			l.ID, vehicle.identity(),
 		)
 
 		if next != nil {
@@ -422,13 +475,13 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 
 	log.Printf(
 		"[lane %s] queue decision ALLOW: value=%s",
-		l.ID, vehicle.Value,
+		l.ID, vehicle.identity(),
 	)
 
 	if next != nil {
 		log.Printf(
 			"[lane %s] activating from queue: value=%s",
-			l.ID, next.Value,
+			l.ID, next.identity(),
 		)
 
 		l.beginVehicle(next)
@@ -473,13 +526,13 @@ func (l *Lane) takeQueueHeadLocked() *VehicleContext {
 func (l *Lane) beginVehicle(vehicle *VehicleContext) {
 	log.Printf(
 		"[lane %s] begin: value=%s direction=%s",
-		l.ID, vehicle.Value, vehicle.Direction,
+		l.ID, vehicle.identity(), vehicle.Direction,
 	)
 
 	if err := l.Scenario.Begin(vehicle.Direction); err != nil {
 		log.Printf(
 			"[lane %s] begin FAILED: value=%s error=%v",
-			l.ID, vehicle.Value, err,
+			l.ID, vehicle.identity(), err,
 		)
 
 		return
@@ -492,10 +545,11 @@ func (l *Lane) decideAsync(vehicle *VehicleContext) {
 	decision, err := l.decider.Decide(
 		context.Background(),
 		access.Request{
-			LaneID:     l.ID,
-			Credential: vehicle.Value,
-			Source:     vehicle.Source,
-			Direction:  vehicle.Direction,
+			LaneID:    l.ID,
+			Plate:     vehicle.Plate,
+			KeyCode:   vehicle.KeyCode,
+			Source:    vehicle.Source,
+			Direction: vehicle.Direction,
 		},
 	)
 
@@ -503,7 +557,7 @@ func (l *Lane) decideAsync(vehicle *VehicleContext) {
 		log.Printf(
 			"[lane %s] decision ERROR: value=%s error=%v",
 			l.ID,
-			vehicle.Value,
+			vehicle.identity(),
 			err,
 		)
 
@@ -519,7 +573,7 @@ func (l *Lane) applyDecision(
 ) {
 	log.Printf(
 		"[lane %s] decision: value=%s allowed=%v",
-		l.ID, vehicle.Value, allowed,
+		l.ID, vehicle.identity(), allowed,
 	)
 
 	l.mu.Lock()
@@ -527,7 +581,7 @@ func (l *Lane) applyDecision(
 	if l.activeVehicle != vehicle || !vehicle.Waiting {
 		log.Printf(
 			"[lane %s] decision IGNORED (stale): value=%s",
-			l.ID, vehicle.Value,
+			l.ID, vehicle.identity(),
 		)
 		l.mu.Unlock()
 
@@ -554,7 +608,7 @@ func (l *Lane) applyDecision(
 
 		log.Printf(
 			"[lane %s] decision ALLOW stored, waiting for automatic mode: value=%s",
-			l.ID, vehicle.Value,
+			l.ID, vehicle.identity(),
 		)
 
 		return
@@ -578,13 +632,13 @@ func (l *Lane) clearVehicle(vehicle *VehicleContext) {
 
 	log.Printf(
 		"[lane %s] passage finished: value=%s",
-		l.ID, vehicle.Value,
+		l.ID, vehicle.identity(),
 	)
 
 	if next != nil {
 		log.Printf(
 			"[lane %s] activating from queue: value=%s",
-			l.ID, next.Value,
+			l.ID, next.identity(),
 		)
 		l.beginVehicle(next)
 	}
@@ -632,7 +686,8 @@ func (l *Lane) Status() (lanestatus.LaneStatus, error) {
 
 		result.Vehicle = &lanestatus.VehicleInfo{
 			ID:        vehicle.ID,
-			Value:     vehicle.Value,
+			Plate:     vehicle.Plate,
+			KeyCode:   vehicle.KeyCode,
 			Direction: vehicle.Direction,
 			Source:    vehicle.Source,
 			Stage:     stage,
@@ -643,7 +698,8 @@ func (l *Lane) Status() (lanestatus.LaneStatus, error) {
 	for _, v := range l.queue {
 		result.Queue = append(result.Queue, lanestatus.QueuedInfo{
 			ID:        v.ID,
-			Value:     v.Value,
+			Plate:     v.Plate,
+			KeyCode:   v.KeyCode,
 			Source:    v.Source,
 			StartedAt: v.StartedAt.Unix(),
 		})
@@ -784,4 +840,30 @@ func stateOrInitial(s lanestatus.State) lanestatus.State {
 	}
 
 	return s
+}
+
+func (l *Lane) TriggerPlate(
+	source scenarios.TriggerSource,
+	plate string,
+	direction string,
+) error {
+	return l.trigger(
+		source,
+		plate,
+		"",
+		direction,
+	)
+}
+
+func (l *Lane) TriggerKeyCode(
+	source scenarios.TriggerSource,
+	keyCode string,
+	direction string,
+) error {
+	return l.trigger(
+		source,
+		"",
+		keyCode,
+		direction,
+	)
 }

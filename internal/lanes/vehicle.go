@@ -8,8 +8,10 @@ import (
 )
 
 type VehicleContext struct {
-	ID        string
-	Value     string
+	ID      string
+	Plate   string
+	KeyCode string
+
 	Source    string
 	Direction string
 
@@ -19,6 +21,14 @@ type VehicleContext struct {
 	StartedAt time.Time
 
 	source scenarios.TriggerSource
+}
+
+func (v *VehicleContext) identity() string {
+	if v.Plate != "" {
+		return "plate=" + v.Plate
+	}
+
+	return "key_code=" + v.KeyCode
 }
 
 func newVehicleID() string {

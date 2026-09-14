@@ -35,7 +35,8 @@ type DeviceStatus struct {
 
 type VehicleInfo struct {
 	ID        string `json:"id"`
-	Value     string `json:"value,omitempty"`
+	Plate     string `json:"plate,omitempty"`
+	KeyCode   string `json:"key_code,omitempty"`
 	Direction string `json:"direction,omitempty"`
 	Source    string `json:"source"`
 	Stage     string `json:"stage"`
@@ -51,7 +52,8 @@ type Snapshot struct {
 
 type QueuedInfo struct {
 	ID        string `json:"id"`
-	Value     string `json:"value,omitempty"`
+	Plate     string `json:"plate,omitempty"`
+	KeyCode   string `json:"key_code,omitempty"`
 	Source    string `json:"source"`
 	StartedAt int64  `json:"started_at"`
 }
