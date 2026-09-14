@@ -130,7 +130,7 @@ func execute(
 }
 
 func printHelp() {
-	fmt.Println(`
+	fmt.Print(`
 Команды:
 
 	status

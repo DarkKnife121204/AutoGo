@@ -64,7 +64,7 @@ func (c *Client) Close() error {
 		return fmt.Errorf("закрытие соединения с PLC: %w", err)
 	}
 
-	log.Printf("[plc %s] подключено", c.config.Address)
+	log.Printf("[plc %s] отключено", c.config.Address)
 
 	return nil
 }

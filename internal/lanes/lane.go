@@ -260,7 +260,6 @@ func (l *Lane) Trigger(
 				"[lane %s] begin (immediate) FAILED: value=%s error=%v",
 				l.ID, vehicle.Value, err,
 			)
-			l.clearVehicle(vehicle)
 
 			return err
 		}
@@ -380,7 +379,18 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 		},
 	)
 
-	allowed := err == nil && decision.Allowed
+	if err != nil {
+		log.Printf(
+			"[lane %s] queue decision ERROR: value=%s error=%v",
+			l.ID,
+			vehicle.Value,
+			err,
+		)
+
+		return
+	}
+
+	allowed := decision.Allowed
 
 	l.mu.Lock()
 
@@ -472,8 +482,6 @@ func (l *Lane) beginVehicle(vehicle *VehicleContext) {
 			l.ID, vehicle.Value, err,
 		)
 
-		l.clearVehicle(vehicle)
-
 		return
 	}
 
@@ -491,9 +499,18 @@ func (l *Lane) decideAsync(vehicle *VehicleContext) {
 		},
 	)
 
-	allowed := err == nil && decision.Allowed
+	if err != nil {
+		log.Printf(
+			"[lane %s] decision ERROR: value=%s error=%v",
+			l.ID,
+			vehicle.Value,
+			err,
+		)
 
-	l.applyDecision(vehicle, allowed)
+		return
+	}
+
+	l.applyDecision(vehicle, decision.Allowed)
 }
 
 func (l *Lane) applyDecision(

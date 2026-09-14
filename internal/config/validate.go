@@ -538,6 +538,8 @@ func validateSingleBarrierSettings(
 				barrierID,
 			),
 		)
+
+		return validationErrors
 	}
 
 	if deviceTypes[barrierID] != DeviceTypeBarrier {
@@ -616,6 +618,21 @@ func validateDoubleBarrierSettings(
 					path,
 					entry,
 					deviceTypes[entry],
+				),
+			)
+		}
+	}
+
+	if exit != "" {
+		if _, exists := laneDeviceIDs[exit]; exists &&
+			deviceTypes[exit] != DeviceTypeBarrier {
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf(
+					"%s.settings.exit_barrier должен ссылаться на устройство типа barrier, %q имеет тип %q",
+					path,
+					exit,
+					deviceTypes[exit],
 				),
 			)
 		}

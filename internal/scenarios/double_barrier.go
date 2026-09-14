@@ -319,7 +319,14 @@ func (d *DoubleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 	stage := d.stage
 	d.mu.Unlock()
 
-	phase := lanestatus.PhaseIdle
+	entryPhase := phaseFromState(entryStatus.State)
+	exitPhase := phaseFromState(exitStatus.State)
+
+	phase := doubleBarrierPhase(
+		entryPhase,
+		exitPhase,
+	)
+
 	if entryStatus.HasAlarm() || exitStatus.HasAlarm() {
 		phase = lanestatus.PhaseError
 	}
@@ -341,6 +348,33 @@ func (d *DoubleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 			},
 		},
 	}, nil
+}
+
+func doubleBarrierPhase(
+	entryPhase lanestatus.Phase,
+	exitPhase lanestatus.Phase,
+) lanestatus.Phase {
+	if entryPhase == lanestatus.PhaseError ||
+		exitPhase == lanestatus.PhaseError {
+		return lanestatus.PhaseError
+	}
+
+	if entryPhase == lanestatus.PhaseOpening ||
+		exitPhase == lanestatus.PhaseOpening {
+		return lanestatus.PhaseOpening
+	}
+
+	if entryPhase == lanestatus.PhaseClosing ||
+		exitPhase == lanestatus.PhaseClosing {
+		return lanestatus.PhaseClosing
+	}
+
+	if entryPhase == lanestatus.PhaseOpened ||
+		exitPhase == lanestatus.PhaseOpened {
+		return lanestatus.PhaseOpened
+	}
+
+	return lanestatus.PhaseIdle
 }
 
 func gateStageName(stage gateStage) string {
