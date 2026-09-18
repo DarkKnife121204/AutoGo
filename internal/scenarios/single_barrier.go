@@ -194,6 +194,7 @@ func (s *SingleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 	return lanestatus.Snapshot{
 		Phase: phaseFromState(plcStatus.State),
 		Alarm: plcStatus.HasAlarm(),
+		Ready: plcStatus.State == plc.StateClosed,
 		Devices: map[string]lanestatus.DeviceStatus{
 			s.barrier.ID: {
 				Type:       "barrier",
@@ -202,6 +203,18 @@ func (s *SingleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 			},
 		},
 	}, nil
+}
+
+func (s *SingleBarrier) NextState() (bool, error) {
+	return false, errors.New(
+		"next_state неприменим для сценария single_barrier",
+	)
+}
+
+func (s *SingleBarrier) PrevState() error {
+	return errors.New(
+		"prev_state неприменим для сценария single_barrier",
+	)
 }
 
 func phaseFromState(state plc.State) lanestatus.Phase {

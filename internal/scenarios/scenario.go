@@ -19,6 +19,9 @@ type Scenario interface {
 
 	Advance() (done bool, err error)
 
+	NextState() (done bool, err error)
+	PrevState() error
+
 	Confirm() error
 	Reject() error
 

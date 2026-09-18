@@ -739,10 +739,8 @@ func deriveState(
 		return lanestatus.StateWaitingTransfer
 	}
 
-	if snapshot.Phase == lanestatus.PhaseOpening ||
-		snapshot.Phase == lanestatus.PhaseOpened ||
-		snapshot.Phase == lanestatus.PhaseClosing {
-		return lanestatus.StateWaitingTransfer
+	if !snapshot.Ready {
+		return lanestatus.StateNotReady
 	}
 
 	return lanestatus.StateIdentEntrance
@@ -793,6 +791,7 @@ func (l *Lane) poll() {
 	l.mu.Unlock()
 
 	if !physical {
+		l.logStateChange()
 		return
 	}
 
@@ -866,4 +865,71 @@ func (l *Lane) TriggerKeyCode(
 		keyCode,
 		direction,
 	)
+}
+
+func (l *Lane) NextState() error {
+	l.mu.Lock()
+
+	if l.mode != ModeAutomatic {
+		l.mu.Unlock()
+
+		return errors.New(
+			"next_state недоступен: линия не в автоматическом режиме",
+		)
+	}
+
+	vehicle := l.activeVehicle
+
+	if vehicle == nil {
+		l.mu.Unlock()
+
+		return errors.New(
+			"next_state недоступен: нет активной машины",
+		)
+	}
+
+	l.mu.Unlock()
+
+	done, err := l.Scenario.NextState()
+	if err != nil {
+		return err
+	}
+
+	if done {
+		l.clearVehicle(vehicle)
+	}
+
+	l.logStateChange()
+
+	return nil
+}
+
+func (l *Lane) PrevState() error {
+	l.mu.Lock()
+
+	if l.mode != ModeAutomatic {
+		l.mu.Unlock()
+
+		return errors.New(
+			"prev_state недоступен: линия не в автоматическом режиме",
+		)
+	}
+
+	if l.activeVehicle == nil {
+		l.mu.Unlock()
+
+		return errors.New(
+			"prev_state недоступен: нет активной машины",
+		)
+	}
+
+	l.mu.Unlock()
+
+	if err := l.Scenario.PrevState(); err != nil {
+		return err
+	}
+
+	l.logStateChange()
+
+	return nil
 }

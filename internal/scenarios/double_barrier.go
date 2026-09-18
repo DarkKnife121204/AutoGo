@@ -8,6 +8,7 @@ import (
 
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanestatus"
+	"AutoGo/internal/plc"
 )
 
 const TypeDoubleBarrier = "double_barrier"
@@ -19,6 +20,7 @@ type gateStage int
 const (
 	gateIdle gateStage = iota
 	gateEntry
+	gateEntryHold
 	gateConfirm
 	gateExit
 	gateReject
@@ -176,6 +178,9 @@ func (d *DoubleBarrier) Advance() (bool, error) {
 	d.mu.Unlock()
 
 	switch stage {
+	case gateEntryHold:
+		return false, nil
+
 	case gateEntry:
 		return d.advanceCycle(inbound, gateEntry, gateConfirm)
 
@@ -334,6 +339,8 @@ func (d *DoubleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 	return lanestatus.Snapshot{
 		Phase: phase,
 		Alarm: entryStatus.HasAlarm() || exitStatus.HasAlarm(),
+		Ready: entryStatus.State == plc.StateClosed &&
+			exitStatus.State == plc.StateClosed,
 		Stage: gateStageName(stage),
 		Devices: map[string]lanestatus.DeviceStatus{
 			d.entry.ID: {
@@ -348,6 +355,60 @@ func (d *DoubleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 			},
 		},
 	}, nil
+}
+
+func (d *DoubleBarrier) NextState() (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	switch d.stage {
+	case gateEntry, gateEntryHold:
+		d.stage = gateConfirm
+		d.startedAt = time.Time{}
+
+		return false, nil
+
+	case gateConfirm:
+		outbound := d.outbound()
+
+		if err := d.startBarrier(outbound); err != nil {
+			return false, err
+		}
+
+		d.stage = gateExit
+		d.startedAt = time.Now()
+
+		return false, nil
+
+	case gateExit, gateReject:
+		d.stage = gateIdle
+		d.startedAt = time.Time{}
+
+		return true, nil
+
+	default:
+		return false, errors.New(
+			"next_state недоступен в текущем состоянии",
+		)
+	}
+}
+
+func (d *DoubleBarrier) PrevState() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	switch d.stage {
+	case gateConfirm, gateExit:
+		d.stage = gateEntryHold
+		d.startedAt = time.Time{}
+
+		return nil
+
+	default:
+		return errors.New(
+			"prev_state недоступен в текущем состоянии",
+		)
+	}
 }
 
 func doubleBarrierPhase(
@@ -379,7 +440,7 @@ func doubleBarrierPhase(
 
 func gateStageName(stage gateStage) string {
 	switch stage {
-	case gateEntry:
+	case gateEntry, gateEntryHold:
 		return "entry"
 	case gateConfirm:
 		return "confirm"

@@ -15,6 +15,7 @@ type State string
 const (
 	StateAlarm    State = "Alarm"
 	StateStopping State = "Stopping"
+	StateNotReady State = "NotReady"
 
 	StateIdentEntrance   State = "IdentEntrance"
 	StateWaitingTransfer State = "WaitingTransfer"
@@ -46,6 +47,7 @@ type VehicleInfo struct {
 type Snapshot struct {
 	Phase   Phase
 	Alarm   bool
+	Ready   bool
 	Stage   string
 	Devices map[string]DeviceStatus
 }

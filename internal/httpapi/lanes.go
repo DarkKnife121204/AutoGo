@@ -60,6 +60,9 @@ func (a *API) laneHandler(
 	case "command":
 		a.laneCommand(w, r, lane)
 
+	case "context":
+		a.laneContext(w, r, lane)
+
 	default:
 		writeJSON(
 			w,
@@ -174,6 +177,12 @@ func (a *API) laneCommand(
 	case "reject":
 		err = lane.Reject()
 
+	case "next_state":
+		err = lane.NextState()
+
+	case "prev_state":
+		err = lane.PrevState()
+
 	default:
 		writeJSON(
 			w,
@@ -208,5 +217,81 @@ func (a *API) laneCommand(
 			Status:  "accepted",
 			Command: command,
 		},
+	)
+}
+
+func (a *API) laneContext(
+	w http.ResponseWriter,
+	r *http.Request,
+	lane *lanes.Lane,
+) {
+	if r.Method != http.MethodGet {
+		writeJSON(
+			w,
+			http.StatusMethodNotAllowed,
+			map[string]string{
+				"status": "error",
+				"error":  "method not allowed",
+			},
+		)
+
+		return
+	}
+
+	status, err := lane.Status()
+	if err != nil {
+		writeJSON(
+			w,
+			http.StatusServiceUnavailable,
+			map[string]string{
+				"status": "error",
+				"error":  err.Error(),
+			},
+		)
+
+		return
+	}
+
+	response := laneContextResponse{
+		CurrentState: string(status.State),
+
+		LastPhotoInfo: photoInfoResponse{
+			HasPhoto: false,
+		},
+
+		VideoInfo: videoInfoResponse{
+			HasVideoRecording: false,
+		},
+
+		OperationsStatus: operationsStatusResponse{},
+
+		VehicleContext: vehicleContextResponse{
+			CurrentVehicle: currentVehicleResponse{
+				PlateType: "",
+			},
+			CachedData: cachedVehicleDataResponse{
+				CachedIdentification: nil,
+				CachedValidation:     nil,
+			},
+		},
+	}
+
+	if status.Vehicle != nil {
+		response.CurrentDirection = status.Vehicle.Direction
+		response.VehicleContext.CurrentVehicle.Direction =
+			status.Vehicle.Direction
+
+		if status.Vehicle.Plate != "" {
+			plate := status.Vehicle.Plate
+
+			response.VehicleContext.CurrentVehicle.PlateNumber =
+				&plate
+		}
+	}
+
+	writeJSON(
+		w,
+		http.StatusOK,
+		response,
 	)
 }
