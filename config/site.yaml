@@ -4,6 +4,15 @@ site:
   id: site-1
   name: Площадка №1
 
+services:
+  - id: axxon-main
+    type: axxon
+    address: "AXXON_ADDRESS"
+    server: "AXXON_SERVER"
+    username: "USERNAME"
+    password: "PASSWORD"
+    timeout: 5s
+
 controllers:
   - id: plc-1
     type: siemens
@@ -43,6 +52,7 @@ devices:
     name: Камера въезда
     type: camera
     external_id: Camera001
+    service: axxon-main
 
   - id: keypad-1
     name: Кодовая панель КПП1
@@ -54,12 +64,14 @@ devices:
     type: camera
     external_id: Camera002
     direction: normal
+    service: axxon-main
 
   - id: cam-3
     name: Камера выезда шлюза реверс
     type: camera
     external_id: Camera003
     direction: reverse
+    service: axxon-main
 
 checkpoints:
   - id: checkpoint-1

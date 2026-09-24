@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"AutoGo/internal/access"
+	"AutoGo/internal/axxon"
 	"AutoGo/internal/checkpoints"
 	"AutoGo/internal/config"
 	"AutoGo/internal/devices"
@@ -112,6 +113,7 @@ func buildLanes(
 	deviceConfigs []config.DeviceConfig,
 	barriers map[string]*devices.Barrier,
 	decider access.Decider,
+	axxonServices map[string]*axxon.Client,
 ) (
 	map[string]*lanes.Lane,
 	map[string]*lanes.Lane,
@@ -166,6 +168,7 @@ func buildLanes(
 					lanes.ParseMode(laneConfig.Mode),
 					decider,
 					collectSources(laneConfig, deviceByID),
+					axxonServices,
 					laneConfig.Scenario.Settings.QueueDepth,
 				)
 				if err != nil {
@@ -244,6 +247,7 @@ func buildLanes(
 					lanes.ParseMode(laneConfig.Mode),
 					decider,
 					collectSources(laneConfig, deviceByID),
+					axxonServices,
 					laneConfig.Scenario.Settings.QueueDepth,
 				)
 				if err != nil {
@@ -323,6 +327,7 @@ func collectSources(
 				device.Name,
 				device.Type,
 				device.ExternalID,
+				device.Service,
 				device.Direction,
 			))
 		}
@@ -377,4 +382,39 @@ func buildCheckpoints(
 	}
 
 	return result, nil
+}
+
+func buildAxxonClients(
+	services []config.ServiceConfig,
+) (map[string]*axxon.Client, error) {
+	clients := make(
+		map[string]*axxon.Client,
+	)
+
+	for _, service := range services {
+		if service.Type != config.ServiceTypeAxxon {
+			continue
+		}
+
+		client, err := axxon.New(
+			axxon.Config{
+				Address:  service.Address,
+				Server:   service.Server,
+				Username: service.Username,
+				Password: service.Password,
+				Timeout:  service.Timeout,
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"создание Axxon-клиента %q: %w",
+				service.ID,
+				err,
+			)
+		}
+
+		clients[service.ID] = client
+	}
+
+	return clients, nil
 }

@@ -20,6 +20,10 @@ type VehicleContext struct {
 
 	StartedAt time.Time
 
+	Photo                  []byte
+	PhotoCapturedAt        time.Time
+	PhotoCaptureInProgress bool
+
 	source scenarios.TriggerSource
 }
 

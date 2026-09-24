@@ -7,6 +7,8 @@ import (
 )
 
 const (
+	ServiceTypeAxxon = "axxon"
+
 	ControllerTypeSiemens = "siemens"
 
 	DeviceTypeBarrier      = "barrier"
@@ -62,6 +64,36 @@ func (c Config) Validate() error {
 	deviceTypes := make(map[string]string)
 	checkpointIDs := make(map[string]struct{})
 	laneIDs := make(map[string]struct{})
+	serviceIDs := make(map[string]struct{})
+	serviceTypes := make(map[string]string)
+
+	for index, service := range c.Services {
+		path := fmt.Sprintf("services[%d]", index)
+
+		if err := validateID(
+			path+".id",
+			service.ID,
+			serviceIDs,
+		); err != nil {
+			validationErrors = append(
+				validationErrors,
+				err,
+			)
+		}
+
+		if err := validateService(
+			path,
+			service,
+		); err != nil {
+			validationErrors = append(
+				validationErrors,
+				err,
+			)
+		}
+
+		serviceTypes[strings.TrimSpace(service.ID)] =
+			strings.TrimSpace(service.Type)
+	}
 
 	for index, controller := range c.Controllers {
 		path := fmt.Sprintf("controllers[%d]", index)
@@ -106,6 +138,8 @@ func (c Config) Validate() error {
 			path,
 			device,
 			controllerIDs,
+			serviceIDs,
+			serviceTypes,
 		); err != nil {
 			validationErrors = append(
 				validationErrors,
@@ -257,6 +291,8 @@ func validateDevice(
 	path string,
 	device DeviceConfig,
 	controllerIDs map[string]struct{},
+	serviceIDs map[string]struct{},
+	serviceTypes map[string]string,
 ) error {
 	var validationErrors []error
 
@@ -316,7 +352,11 @@ func validateDevice(
 		if strings.TrimSpace(device.ExternalID) == "" {
 			validationErrors = append(
 				validationErrors,
-				fmt.Errorf("%s.external_id обязателен для %s", path, device.Type),
+				fmt.Errorf(
+					"%s.external_id обязателен для %s",
+					path,
+					device.Type,
+				),
 			)
 		}
 
@@ -327,7 +367,8 @@ func validateDevice(
 				validationErrors,
 				fmt.Errorf(
 					"%s.direction содержит неизвестное значение %q",
-					path, device.Direction,
+					path,
+					device.Direction,
 				),
 			)
 		}
@@ -342,6 +383,45 @@ func validateDevice(
 				),
 			)
 		}
+	}
+
+	if device.Type == DeviceTypeCamera {
+		serviceID := strings.TrimSpace(device.Service)
+
+		if serviceID == "" {
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf(
+					"%s.service обязателен для camera",
+					path,
+				),
+			)
+		} else if _, exists := serviceIDs[serviceID]; !exists {
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf(
+					"%s.service ссылается на неизвестный service %q",
+					path,
+					serviceID,
+				),
+			)
+		} else if serviceTypes[serviceID] != ServiceTypeAxxon {
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf(
+					"%s.service камеры должен ссылаться на сервис типа axxon",
+					path,
+				),
+			)
+		}
+	} else if strings.TrimSpace(device.Service) != "" {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.service допустим только для camera",
+				path,
+			),
+		)
 	}
 
 	return errors.Join(validationErrors...)
@@ -658,4 +738,56 @@ func validateReleaseMode(
 			),
 		}
 	}
+}
+
+func validateService(
+	path string,
+	service ServiceConfig,
+) error {
+	var validationErrors []error
+
+	switch strings.TrimSpace(service.Type) {
+	case ServiceTypeAxxon:
+	default:
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.type содержит неизвестный тип %q",
+				path,
+				service.Type,
+			),
+		)
+	}
+
+	if strings.TrimSpace(service.Address) == "" {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.address обязателен",
+				path,
+			),
+		)
+	}
+
+	if strings.TrimSpace(service.Server) == "" {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.server обязателен",
+				path,
+			),
+		)
+	}
+
+	if service.Timeout <= 0 {
+		validationErrors = append(
+			validationErrors,
+			fmt.Errorf(
+				"%s.timeout должен быть больше 0",
+				path,
+			),
+		)
+	}
+
+	return errors.Join(validationErrors...)
 }

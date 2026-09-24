@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"AutoGo/internal/access"
+	"AutoGo/internal/axxon"
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanestatus"
 	"AutoGo/internal/scenarios"
@@ -29,6 +30,7 @@ type Lane struct {
 	releaseMode string
 	decider     access.Decider
 	sources     []*devices.Source
+	services    map[string]*axxon.Client
 
 	mu            sync.Mutex
 	mode          Mode
@@ -37,6 +39,11 @@ type Lane struct {
 	pending       []*VehicleContext
 	queue         []*VehicleContext
 	queueDepth    int
+
+	photoVehicleID         string
+	photo                  []byte
+	photoCapturedAt        time.Time
+	photoCaptureInProgress bool
 
 	stopPoller chan struct{}
 	pollerDone chan struct{}
@@ -50,6 +57,7 @@ func New(
 	defaultMode Mode,
 	decider access.Decider,
 	sources []*devices.Source,
+	services map[string]*axxon.Client,
 	queueDepth int,
 ) (*Lane, error) {
 	if id == "" {
@@ -71,6 +79,7 @@ func New(
 		releaseMode:  scenario.ReleaseMode(),
 		decider:      decider,
 		sources:      sources,
+		services:     services,
 		mode:         defaultMode,
 		queueDepth:   queueDepth,
 	}, nil
@@ -120,9 +129,7 @@ func (l *Lane) Start() error {
 			l.ID, current.identity(),
 		)
 
-		l.beginVehicle(current)
-
-		return nil
+		return l.beginVehicle(current)
 	}
 
 	if next != nil {
@@ -131,7 +138,7 @@ func (l *Lane) Start() error {
 			l.ID, next.identity(),
 		)
 
-		l.beginVehicle(next)
+		return l.beginVehicle(next)
 	}
 
 	return nil
@@ -173,7 +180,7 @@ func (l *Lane) Reset() error {
 			l.ID, next.identity(),
 		)
 
-		l.beginVehicle(next)
+		return l.beginVehicle(next)
 	}
 
 	return nil
@@ -262,6 +269,8 @@ func (l *Lane) trigger(
 			l.queue = append(l.queue, vehicle)
 			l.mu.Unlock()
 
+			l.startPhotoCapture(vehicle)
+
 			log.Printf(
 				"[lane %s] queued in manual: value=%s",
 				l.ID,
@@ -273,6 +282,8 @@ func (l *Lane) trigger(
 
 		l.pending = append(l.pending, vehicle)
 		l.mu.Unlock()
+
+		l.startPhotoCapture(vehicle)
 
 		log.Printf(
 			"[lane %s] pending in manual: value=%s",
@@ -293,6 +304,8 @@ func (l *Lane) trigger(
 			l.activeVehicle = vehicle
 			l.mu.Unlock()
 
+			l.startPhotoCapture(vehicle)
+
 			go l.decideAsync(vehicle)
 
 			return nil
@@ -301,21 +314,9 @@ func (l *Lane) trigger(
 		l.activeVehicle = vehicle
 		l.mu.Unlock()
 
-		log.Printf(
-			"[lane %s] begin (immediate): value=%s direction=%s",
-			l.ID, vehicle.identity(), vehicle.Direction,
-		)
+		l.startPhotoCapture(vehicle)
 
-		if err := l.Scenario.Begin(vehicle.Direction); err != nil {
-			log.Printf(
-				"[lane %s] begin (immediate) FAILED: value=%s error=%v",
-				l.ID, vehicle.identity(), err,
-			)
-
-			return err
-		}
-
-		return nil
+		return l.beginVehicle(vehicle)
 	}
 
 	if l.isDuplicateLocked(source, plate, keyCode) {
@@ -348,6 +349,8 @@ func (l *Lane) trigger(
 		l.queue = append(l.queue, vehicle)
 		l.mu.Unlock()
 
+		l.startPhotoCapture(vehicle)
+
 		log.Printf(
 			"[lane %s] queued (immediate): value=%s",
 			l.ID, vehicle.identity(),
@@ -358,6 +361,8 @@ func (l *Lane) trigger(
 
 	l.pending = append(l.pending, vehicle)
 	l.mu.Unlock()
+
+	l.startPhotoCapture(vehicle)
 
 	log.Printf(
 		"[lane %s] pending (awaiting decision): value=%s",
@@ -523,22 +528,45 @@ func (l *Lane) takeQueueHeadLocked() *VehicleContext {
 	return head
 }
 
-func (l *Lane) beginVehicle(vehicle *VehicleContext) {
+func (l *Lane) beginVehicle(
+	vehicle *VehicleContext,
+) error {
 	log.Printf(
 		"[lane %s] begin: value=%s direction=%s",
-		l.ID, vehicle.identity(), vehicle.Direction,
+		l.ID,
+		vehicle.identity(),
+		vehicle.Direction,
 	)
 
 	if err := l.Scenario.Begin(vehicle.Direction); err != nil {
 		log.Printf(
 			"[lane %s] begin FAILED: value=%s error=%v",
-			l.ID, vehicle.identity(), err,
+			l.ID,
+			vehicle.identity(),
+			err,
 		)
 
-		return
+		return err
 	}
 
+	l.mu.Lock()
+
+	l.photoVehicleID = vehicle.ID
+	l.photo = nil
+	l.photoCapturedAt = time.Time{}
+	l.photoCaptureInProgress =
+		vehicle.PhotoCaptureInProgress
+
+	if len(vehicle.Photo) > 0 {
+		l.photo = vehicle.Photo
+		l.photoCapturedAt = vehicle.PhotoCapturedAt
+	}
+
+	l.mu.Unlock()
+
 	l.logStateChange()
+
+	return nil
 }
 
 func (l *Lane) decideAsync(vehicle *VehicleContext) {
@@ -932,4 +960,113 @@ func (l *Lane) PrevState() error {
 	l.logStateChange()
 
 	return nil
+}
+
+func (l *Lane) startPhotoCapture(
+	vehicle *VehicleContext,
+) {
+	var camera *devices.Source
+
+	for _, source := range l.sources {
+		if source.Type != "camera" {
+			continue
+		}
+
+		if source.Direction != vehicle.Direction {
+			continue
+		}
+
+		camera = source
+		break
+	}
+
+	if camera == nil {
+		return
+	}
+
+	client, exists := l.services[camera.Service]
+	if !exists {
+		log.Printf(
+			"[lane %s] photo capture skipped: Axxon service %q not found",
+			l.ID,
+			camera.Service,
+		)
+
+		return
+	}
+
+	l.mu.Lock()
+	vehicle.PhotoCaptureInProgress = true
+	l.mu.Unlock()
+
+	go func() {
+		image, err := client.Snapshot(
+			context.Background(),
+			camera.ExternalID,
+		)
+
+		capturedAt := time.Now()
+
+		l.mu.Lock()
+
+		vehicle.PhotoCaptureInProgress = false
+
+		if err == nil {
+			vehicle.Photo = image
+			vehicle.PhotoCapturedAt = capturedAt
+		}
+
+		if l.photoVehicleID == vehicle.ID {
+			l.photoCaptureInProgress = false
+
+			if err == nil {
+				l.photo = vehicle.Photo
+				l.photoCapturedAt = vehicle.PhotoCapturedAt
+			}
+		}
+
+		l.mu.Unlock()
+
+		if err != nil {
+			log.Printf(
+				"[lane %s] photo capture FAILED: camera=%s value=%s error=%v",
+				l.ID,
+				camera.ID,
+				vehicle.identity(),
+				err,
+			)
+
+			return
+		}
+
+		log.Printf(
+			"[lane %s] photo captured: camera=%s value=%s size=%d",
+			l.ID,
+			camera.ID,
+			vehicle.identity(),
+			len(image),
+		)
+	}()
+}
+
+func (l *Lane) Photo() (
+	[]byte,
+	time.Time,
+	bool,
+) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var image []byte
+
+	if len(l.photo) > 0 {
+		image = append(
+			[]byte(nil),
+			l.photo...,
+		)
+	}
+
+	return image,
+		l.photoCapturedAt,
+		l.photoCaptureInProgress
 }

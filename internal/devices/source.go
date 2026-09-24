@@ -5,6 +5,7 @@ type Source struct {
 	Name       string
 	Type       string
 	ExternalID string
+	Service    string
 	Direction  string
 }
 
@@ -13,6 +14,7 @@ func NewSource(
 	name string,
 	deviceType string,
 	externalID string,
+	service string,
 	direction string,
 ) *Source {
 	if direction == "" {
@@ -24,6 +26,7 @@ func NewSource(
 		Name:       name,
 		Type:       deviceType,
 		ExternalID: externalID,
+		Service:    service,
 		Direction:  direction,
 	}
 }

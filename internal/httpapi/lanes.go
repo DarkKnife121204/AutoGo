@@ -239,6 +239,8 @@ func (a *API) laneContext(
 	}
 
 	status, err := lane.Status()
+	photo, photoCapturedAt, photoCaptureInProgress :=
+		lane.Photo()
 	if err != nil {
 		writeJSON(
 			w,
@@ -263,7 +265,9 @@ func (a *API) laneContext(
 			HasVideoRecording: false,
 		},
 
-		OperationsStatus: operationsStatusResponse{},
+		OperationsStatus: operationsStatusResponse{
+			IsPhotoCaptureInProgress: photoCaptureInProgress,
+		},
 
 		VehicleContext: vehicleContextResponse{
 			CurrentVehicle: currentVehicleResponse{
@@ -286,6 +290,18 @@ func (a *API) laneContext(
 
 			response.VehicleContext.CurrentVehicle.PlateNumber =
 				&plate
+		}
+	}
+
+	if len(photo) > 0 {
+		fileSize := int64(len(photo))
+		captureTime := photoCapturedAt
+
+		response.LastPhotoInfo = photoInfoResponse{
+			HasPhoto:    true,
+			CaptureTime: &captureTime,
+			FileSize:    &fileSize,
+			Image:       photo,
 		}
 	}
 

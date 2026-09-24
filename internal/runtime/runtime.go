@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"AutoGo/internal/access"
+	"AutoGo/internal/axxon"
 	"AutoGo/internal/checkpoints"
 	"AutoGo/internal/config"
 	"AutoGo/internal/devices"
@@ -10,6 +11,8 @@ import (
 )
 
 type Runtime struct {
+	AxxonServices map[string]*axxon.Client
+
 	Controllers  map[string]*plcclient.Client
 	Barriers     map[string]*devices.Barrier
 	Lanes        map[string]*lanes.Lane
@@ -19,6 +22,11 @@ type Runtime struct {
 }
 
 func Build(cfg config.Config) (*Runtime, error) {
+	axxonServices, err := buildAxxonClients(cfg.Services)
+	if err != nil {
+		return nil, err
+	}
+
 	controllers, err := buildPLCClients(cfg.Controllers)
 	if err != nil {
 		return nil, err
@@ -38,6 +46,7 @@ func Build(cfg config.Config) (*Runtime, error) {
 		cfg.Devices,
 		barriers,
 		decider,
+		axxonServices,
 	)
 	if err != nil {
 		closePLCClients(controllers)
@@ -53,12 +62,13 @@ func Build(cfg config.Config) (*Runtime, error) {
 	}
 
 	return &Runtime{
-		Controllers:  controllers,
-		Barriers:     barriers,
-		Lanes:        siteLanes,
-		BarrierLane:  barrierLane,
-		TriggerIndex: triggerIndex,
-		Checkpoints:  siteCheckpoints,
+		AxxonServices: axxonServices,
+		Controllers:   controllers,
+		Barriers:      barriers,
+		Lanes:         siteLanes,
+		BarrierLane:   barrierLane,
+		TriggerIndex:  triggerIndex,
+		Checkpoints:   siteCheckpoints,
 	}, nil
 }
 

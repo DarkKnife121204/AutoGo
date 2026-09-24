@@ -5,6 +5,7 @@ import "time"
 type Config struct {
 	Version     int                `yaml:"version"`
 	Site        SiteConfig         `yaml:"site"`
+	Services    []ServiceConfig    `yaml:"services"`
 	Controllers []ControllerConfig `yaml:"controllers"`
 	Devices     []DeviceConfig     `yaml:"devices"`
 	Checkpoints []CheckpointConfig `yaml:"checkpoints"`
@@ -13,6 +14,16 @@ type Config struct {
 type SiteConfig struct {
 	ID   string `yaml:"id"`
 	Name string `yaml:"name"`
+}
+
+type ServiceConfig struct {
+	ID       string        `yaml:"id"`
+	Type     string        `yaml:"type"`
+	Address  string        `yaml:"address"`
+	Server   string        `yaml:"server"`
+	Username string        `yaml:"username"`
+	Password string        `yaml:"password"`
+	Timeout  time.Duration `yaml:"timeout"`
 }
 
 type ControllerConfig struct {
@@ -29,6 +40,7 @@ type DeviceConfig struct {
 	Type       string `yaml:"type"`
 	Controller string `yaml:"controller"`
 	ExternalID string `yaml:"external_id"`
+	Service    string `yaml:"service"`
 	Direction  string `yaml:"direction"`
 }
 
