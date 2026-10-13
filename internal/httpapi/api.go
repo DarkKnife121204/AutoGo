@@ -42,6 +42,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/checkpoints/", a.checkpointHandler)
 	mux.HandleFunc("/barriers/", a.barrierHandler)
 	mux.HandleFunc("/lanes/", a.laneHandler)
+	mux.HandleFunc("GET /lanes/{laneID}/photo/last", a.lanePhotoLast)
 	mux.HandleFunc("/plate", a.plateTrigger)
 	mux.HandleFunc("/code", a.codeTrigger)
 

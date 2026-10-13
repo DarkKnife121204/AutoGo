@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	pollInterval = 200 * time.Millisecond
+	pollInterval      = 200 * time.Millisecond
+	photoCacheTimeout = 600 * time.Second
 
 	releaseModeExternalConfirmation = "external_confirmation"
 )
@@ -299,6 +300,8 @@ func (l *Lane) trigger(
 	if l.activeVehicle == nil {
 		vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
 
+		l.photoVehicleID = vehicle.ID
+		l.photoCaptureInProgress = false
 		if l.releaseMode == releaseModeExternalConfirmation {
 			vehicle.Waiting = true
 			l.activeVehicle = vehicle
@@ -552,12 +555,11 @@ func (l *Lane) beginVehicle(
 	l.mu.Lock()
 
 	l.photoVehicleID = vehicle.ID
-	l.photo = nil
-	l.photoCapturedAt = time.Time{}
-	l.photoCaptureInProgress =
-		vehicle.PhotoCaptureInProgress
+	l.photoCaptureInProgress = vehicle.PhotoCaptureInProgress
 
-	if len(vehicle.Photo) > 0 {
+	if len(vehicle.Photo) > 0 &&
+		!vehicle.PhotoCapturedAt.IsZero() &&
+		time.Since(vehicle.PhotoCapturedAt) < photoCacheTimeout {
 		l.photo = vehicle.Photo
 		l.photoCapturedAt = vehicle.PhotoCapturedAt
 	}
@@ -997,6 +999,11 @@ func (l *Lane) startPhotoCapture(
 
 	l.mu.Lock()
 	vehicle.PhotoCaptureInProgress = true
+
+	if l.photoVehicleID == vehicle.ID {
+		l.photoCaptureInProgress = true
+	}
+
 	l.mu.Unlock()
 
 	go func() {
@@ -1056,6 +1063,13 @@ func (l *Lane) Photo() (
 ) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if len(l.photo) > 0 &&
+		(l.photoCapturedAt.IsZero() ||
+			time.Since(l.photoCapturedAt) >= photoCacheTimeout) {
+		l.photo = nil
+		l.photoCapturedAt = time.Time{}
+	}
 
 	var image []byte
 

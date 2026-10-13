@@ -296,12 +296,13 @@ func (a *API) laneContext(
 	if len(photo) > 0 {
 		fileSize := int64(len(photo))
 		captureTime := photoCapturedAt
+		fileName := "Photo captured successfully"
 
 		response.LastPhotoInfo = photoInfoResponse{
 			HasPhoto:    true,
 			CaptureTime: &captureTime,
 			FileSize:    &fileSize,
-			Image:       photo,
+			FileName:    &fileName,
 		}
 	}
 
@@ -310,4 +311,37 @@ func (a *API) laneContext(
 		http.StatusOK,
 		response,
 	)
+}
+
+func (a *API) lanePhotoLast(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	laneID := r.PathValue("laneID")
+
+	lane, exists := a.lanes[laneID]
+	if !exists {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"status": "error",
+			"error":  "lane not found",
+		})
+		return
+	}
+
+	photo, _, _ := lane.Photo()
+
+	if len(photo) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"errorType": "PhotoNotFound",
+			"message":   "Фото недоступно",
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := w.Write(photo); err != nil {
+		log.Printf("[lane %s] ошибка отправки JPEG: %v", lane.ID, err)
+	}
 }

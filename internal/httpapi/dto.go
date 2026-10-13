@@ -77,7 +77,6 @@ type photoInfoResponse struct {
 	CaptureTime *time.Time `json:"captureTime"`
 	FileSize    *int64     `json:"fileSize"`
 	FileName    *string    `json:"fileName"`
-	Image       []byte     `json:"image,omitempty"`
 }
 
 type videoInfoResponse struct {
