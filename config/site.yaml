@@ -79,6 +79,7 @@ checkpoints:
 
     lanes:
       - id: lane-1
+        gate_name: gate_1.1.1
         name: Линия №1
         mode: automatic
         devices:
@@ -92,6 +93,7 @@ checkpoints:
             release_mode: external_confirmation
 
       - id: lane-2
+        gate_name: gate_1.1.2
         name: Линия №2 (шлюз)
         mode: automatic
         devices:

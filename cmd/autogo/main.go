@@ -81,6 +81,7 @@ func main() {
 		rt.BarrierLane,
 		rt.TriggerIndex,
 		rt.Checkpoints,
+		rt.GateLanes,
 	)
 
 	server := &http.Server{

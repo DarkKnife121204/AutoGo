@@ -16,6 +16,7 @@ type API struct {
 	barrierLane  map[string]*lanes.Lane
 	triggerIndex map[string]lanes.TriggerTarget
 	checkpoints  map[string]*checkpoints.Checkpoint
+	gateLanes    map[string]*lanes.Lane
 }
 
 func New(
@@ -24,6 +25,7 @@ func New(
 	barrierLane map[string]*lanes.Lane,
 	triggerIndex map[string]lanes.TriggerTarget,
 	siteCheckpoints map[string]*checkpoints.Checkpoint,
+	gateLanes map[string]*lanes.Lane,
 ) *API {
 	return &API{
 		barriers:     barriers,
@@ -31,6 +33,7 @@ func New(
 		barrierLane:  barrierLane,
 		triggerIndex: triggerIndex,
 		checkpoints:  siteCheckpoints,
+		gateLanes:    gateLanes,
 	}
 }
 
@@ -42,9 +45,18 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/checkpoints/", a.checkpointHandler)
 	mux.HandleFunc("/barriers/", a.barrierHandler)
 	mux.HandleFunc("/lanes/", a.laneHandler)
-	mux.HandleFunc("GET /lanes/{laneID}/photo/last", a.lanePhotoLast)
 	mux.HandleFunc("/plate", a.plateTrigger)
 	mux.HandleFunc("/code", a.codeTrigger)
+
+	mux.HandleFunc(
+		"GET /api/v1/autogate/context",
+		a.withGateName(a.laneContext),
+	)
+
+	mux.HandleFunc(
+		"GET /api/v1/autogate/photo/last",
+		a.withGateName(a.compatPhotoLast),
+	)
 
 	return logRequests(mux)
 }

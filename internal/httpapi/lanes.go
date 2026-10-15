@@ -60,9 +60,6 @@ func (a *API) laneHandler(
 	case "command":
 		a.laneCommand(w, r, lane)
 
-	case "context":
-		a.laneContext(w, r, lane)
-
 	default:
 		writeJSON(
 			w,
@@ -313,21 +310,10 @@ func (a *API) laneContext(
 	)
 }
 
-func (a *API) lanePhotoLast(
+func (a *API) writeLanePhotoLast(
 	w http.ResponseWriter,
-	r *http.Request,
+	lane *lanes.Lane,
 ) {
-	laneID := r.PathValue("laneID")
-
-	lane, exists := a.lanes[laneID]
-	if !exists {
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"status": "error",
-			"error":  "lane not found",
-		})
-		return
-	}
-
 	photo, _, _ := lane.Photo()
 
 	if len(photo) == 0 {
@@ -342,6 +328,10 @@ func (a *API) lanePhotoLast(
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(photo); err != nil {
-		log.Printf("[lane %s] ошибка отправки JPEG: %v", lane.ID, err)
+		log.Printf(
+			"[lane %s] ошибка отправки JPEG: %v",
+			lane.ID,
+			err,
+		)
 	}
 }

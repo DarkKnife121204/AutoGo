@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -31,6 +32,8 @@ const (
 	LaneModeAutomatic = "automatic"
 	LaneModeManual    = "manual"
 )
+
+var gateNamePattern = regexp.MustCompile(`^gate_[0-9]+\.[0-9]+\.[0-9]+$`)
 
 func (c Config) Validate() error {
 	var validationErrors []error
@@ -64,6 +67,7 @@ func (c Config) Validate() error {
 	deviceTypes := make(map[string]string)
 	checkpointIDs := make(map[string]struct{})
 	laneIDs := make(map[string]struct{})
+	gateNames := make(map[string]struct{})
 	serviceIDs := make(map[string]struct{})
 	serviceTypes := make(map[string]string)
 
@@ -184,14 +188,30 @@ func (c Config) Validate() error {
 			)
 
 			if err := validateID(
+				lanePath+".gate_name",
+				lane.GateName,
+				gateNames,
+			); err != nil {
+				validationErrors = append(validationErrors, err)
+			}
+
+			if lane.GateName != "" && !gateNamePattern.MatchString(lane.GateName) {
+				validationErrors = append(
+					validationErrors,
+					fmt.Errorf(
+						"%s.gate_name имеет неверный формат %q",
+						lanePath,
+						lane.GateName,
+					),
+				)
+			}
+
+			if err := validateID(
 				lanePath+".id",
 				lane.ID,
 				laneIDs,
 			); err != nil {
-				validationErrors = append(
-					validationErrors,
-					err,
-				)
+				validationErrors = append(validationErrors, err)
 			}
 
 			if err := validateLane(

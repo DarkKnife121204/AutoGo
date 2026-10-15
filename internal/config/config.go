@@ -52,6 +52,7 @@ type CheckpointConfig struct {
 
 type LaneConfig struct {
 	ID       string         `yaml:"id"`
+	GateName string         `yaml:"gate_name"`
 	Name     string         `yaml:"name"`
 	Mode     string         `yaml:"mode"`
 	Devices  []string       `yaml:"devices"`
