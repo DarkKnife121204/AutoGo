@@ -4,255 +4,41 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
 
 	"AutoGo/internal/lanes"
 )
 
-func (a *API) laneHandler(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
-	path := strings.TrimPrefix(
-		r.URL.Path,
-		"/lanes/",
-	)
-
-	parts := strings.Split(
-		strings.Trim(path, "/"),
-		"/",
-	)
-
-	if len(parts) != 2 {
-		writeJSON(
-			w,
-			http.StatusNotFound,
-			map[string]string{
-				"status": "error",
-				"error":  "route not found",
-			},
-		)
-
-		return
-	}
-
-	laneID := parts[0]
-	action := parts[1]
-
-	lane, exists := a.lanes[laneID]
-	if !exists {
-		writeJSON(
-			w,
-			http.StatusNotFound,
-			map[string]string{
-				"status": "error",
-				"error":  "lane not found",
-			},
-		)
-
-		return
-	}
-
-	switch action {
-	case "status":
-		a.laneStatus(w, r, lane)
-
-	case "command":
-		a.laneCommand(w, r, lane)
-
-	default:
-		writeJSON(
-			w,
-			http.StatusNotFound,
-			map[string]string{
-				"status": "error",
-				"error":  "route not found",
-			},
-		)
-	}
-}
-
-func (a *API) laneStatus(
-	w http.ResponseWriter,
-	r *http.Request,
-	lane *lanes.Lane,
-) {
-	if r.Method != http.MethodGet {
-		writeJSON(
-			w,
-			http.StatusMethodNotAllowed,
-			map[string]string{
-				"status": "error",
-				"error":  "method not allowed",
-			},
-		)
-
-		return
-	}
-
-	status, err := lane.Status()
-	if err != nil {
-		writeJSON(
-			w,
-			http.StatusServiceUnavailable,
-			map[string]string{
-				"status": "error",
-				"error":  err.Error(),
-			},
-		)
-
-		return
-	}
-
-	writeJSON(
-		w,
-		http.StatusOK,
-		laneStatusResponse{
-			LaneStatus: status,
-		},
-	)
-}
-
-func (a *API) laneCommand(
-	w http.ResponseWriter,
-	r *http.Request,
-	lane *lanes.Lane,
-) {
-	if r.Method != http.MethodPost {
-		writeJSON(
-			w,
-			http.StatusMethodNotAllowed,
-			map[string]string{
-				"status": "error",
-				"error":  "method not allowed",
-			},
-		)
-
-		return
-	}
-
-	var request plcCommandRequest
-
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&request); err != nil {
-		writeJSON(
-			w,
-			http.StatusBadRequest,
-			map[string]string{
-				"status": "error",
-				"error":  "invalid JSON body",
-			},
-		)
-
-		return
-	}
-
-	command := strings.ToLower(
-		strings.TrimSpace(request.Command),
-	)
-
-	log.Printf("[lane %s] command: %s", lane.ID, command)
-
-	var err error
-
-	switch command {
-
-	case "start":
-		err = lane.Start()
-
-	case "stop":
-		err = lane.Stop()
-
-	case "reset":
-		err = lane.Reset()
-
-	case "confirm":
-		err = lane.Confirm()
-
-	case "reject":
-		err = lane.Reject()
-
-	case "next_state":
-		err = lane.NextState()
-
-	case "prev_state":
-		err = lane.PrevState()
-
-	default:
-		writeJSON(
-			w,
-			http.StatusBadRequest,
-			map[string]string{
-				"status": "error",
-				"error":  "unknown lane command",
-			},
-		)
-
-		return
-	}
-
-	if err != nil {
-		log.Printf("[lane %s] command %s FAILED: %v", lane.ID, command, err)
-		writeJSON(
-			w,
-			http.StatusServiceUnavailable,
-			map[string]string{
-				"status": "error",
-				"error":  err.Error(),
-			},
-		)
-
-		return
-	}
-
-	writeJSON(
-		w,
-		http.StatusAccepted,
-		plcCommandResponse{
-			Status:  "accepted",
-			Command: command,
-		},
-	)
-}
-
 func (a *API) laneContext(
 	w http.ResponseWriter,
-	r *http.Request,
+	_ *http.Request,
 	lane *lanes.Lane,
 ) {
-	if r.Method != http.MethodGet {
-		writeJSON(
-			w,
-			http.StatusMethodNotAllowed,
-			map[string]string{
-				"status": "error",
-				"error":  "method not allowed",
-			},
-		)
-
-		return
-	}
-
-	status, err := lane.Status()
-	photo, photoCapturedAt, photoCaptureInProgress :=
-		lane.Photo()
+	context, err := a.makeLaneContext(lane)
 	if err != nil {
-		writeJSON(
-			w,
-			http.StatusServiceUnavailable,
-			map[string]string{
-				"status": "error",
-				"error":  err.Error(),
-			},
-		)
-
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"errorType": "InternalError",
+			"message":   "Внутренняя ошибка сервера: " + err.Error(),
+		})
 		return
 	}
+
+	writeJSON(w, http.StatusOK, context)
+}
+
+func (a *API) makeLaneContext(
+	lane *lanes.Lane,
+) (laneContextResponse, error) {
+	status, err := lane.Status()
+	if err != nil {
+		return laneContextResponse{}, err
+	}
+
+	photo, photoCapturedAt, photoCaptureInProgress := lane.Photo()
 
 	response := laneContextResponse{
-		CurrentState: string(status.State),
+		CurrentState:        string(status.State),
+		CurrentDirection:    "Unknown",
+		IsBidirectionalMode: &lane.BidirectionalMode,
 
 		LastPhotoInfo: photoInfoResponse{
 			HasPhoto: false,
@@ -268,7 +54,8 @@ func (a *API) laneContext(
 
 		VehicleContext: vehicleContextResponse{
 			CurrentVehicle: currentVehicleResponse{
-				PlateType: "",
+				Direction: "Unknown",
+				PlateType: "Invalid",
 			},
 			CachedData: cachedVehicleDataResponse{
 				CachedIdentification: nil,
@@ -278,15 +65,21 @@ func (a *API) laneContext(
 	}
 
 	if status.Vehicle != nil {
-		response.CurrentDirection = status.Vehicle.Direction
-		response.VehicleContext.CurrentVehicle.Direction =
-			status.Vehicle.Direction
+		direction := "Unknown"
+
+		switch status.Vehicle.Direction {
+		case "normal":
+			direction = "Forward"
+		case "reverse":
+			direction = "Backward"
+		}
+
+		response.CurrentDirection = direction
+		response.VehicleContext.CurrentVehicle.Direction = direction
 
 		if status.Vehicle.Plate != "" {
 			plate := status.Vehicle.Plate
-
-			response.VehicleContext.CurrentVehicle.PlateNumber =
-				&plate
+			response.VehicleContext.CurrentVehicle.PlateNumber = &plate
 		}
 	}
 
@@ -303,11 +96,7 @@ func (a *API) laneContext(
 		}
 	}
 
-	writeJSON(
-		w,
-		http.StatusOK,
-		response,
-	)
+	return response, nil
 }
 
 func (a *API) writeLanePhotoLast(
@@ -319,7 +108,7 @@ func (a *API) writeLanePhotoLast(
 	if len(photo) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"errorType": "PhotoNotFound",
-			"message":   "Фото недоступно",
+			"message":   "Фото не найдено",
 		})
 		return
 	}
@@ -334,4 +123,90 @@ func (a *API) writeLanePhotoLast(
 			err,
 		)
 	}
+}
+
+func (a *API) lanePhotoLast(
+	w http.ResponseWriter,
+	_ *http.Request,
+	lane *lanes.Lane,
+) {
+	a.writeLanePhotoLast(w, lane)
+}
+
+type laneCommandRequest struct {
+	CommandType string `json:"commandType"`
+}
+
+func (a *API) laneCommand(
+	w http.ResponseWriter,
+	r *http.Request,
+	lane *lanes.Lane,
+) {
+	var request laneCommandRequest
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"errorType": "InvalidCommand",
+			"message":   "Неверный формат команды",
+		})
+		return
+	}
+
+	var err error
+
+	switch request.CommandType {
+	case "NextState":
+		err = lane.NextState()
+
+	case "PrevState":
+		err = lane.PrevState()
+
+	case "Reset":
+		err = lane.Reset()
+
+	case "Start":
+		err = lane.Start()
+
+	case "Stop":
+		err = lane.Stop()
+
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"errorType": "InvalidCommand",
+			"message":   "Неизвестная или пока не реализованная команда: " + request.CommandType,
+		})
+		return
+	}
+
+	if err != nil {
+		log.Printf(
+			"[lane %s] command %s failed: %v",
+			lane.ID,
+			request.CommandType,
+			err,
+		)
+
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"errorType": "InvalidState",
+			"message":   err.Error(),
+		})
+		return
+	}
+
+	context, err := a.makeLaneContext(lane)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"errorType": "InternalError",
+			"message":   "Внутренняя ошибка сервера: " + err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"message":        "Команда " + request.CommandType + " выполнена успешно",
+		"updatedContext": context,
+	})
 }

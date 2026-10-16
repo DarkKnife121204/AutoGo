@@ -82,6 +82,7 @@ checkpoints:
         gate_name: gate_1.1.1
         name: Линия №1
         mode: automatic
+        bidirectional_mode: true
         devices:
           - barrier-1
           - cam-1
@@ -96,6 +97,7 @@ checkpoints:
         gate_name: gate_1.1.2
         name: Линия №2 (шлюз)
         mode: automatic
+        bidirectional_mode: true
         devices:
           - barrier-2
           - barrier-3

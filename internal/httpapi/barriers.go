@@ -2,258 +2,176 @@ package httpapi
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanes"
+	"AutoGo/internal/plc"
 )
 
-func (a *API) barrierHandler(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
-	path := strings.TrimPrefix(
-		r.URL.Path,
-		"/barriers/",
-	)
-
-	parts := strings.Split(
-		strings.Trim(path, "/"),
-		"/",
-	)
-
-	if len(parts) != 2 {
-		writeJSON(
-			w,
-			http.StatusNotFound,
-			map[string]string{
-				"status": "error",
-				"error":  "route not found",
-			},
-		)
-
-		return
-	}
-
-	barrierID := parts[0]
-	action := parts[1]
-
-	barrier, exists := a.barriers[barrierID]
-	if !exists {
-		writeJSON(
-			w,
-			http.StatusNotFound,
-			map[string]string{
-				"status": "error",
-				"error":  "barrier not found",
-			},
-		)
-
-		return
-	}
-
-	switch action {
-	case "status":
-		a.barrierStatus(w, r, barrier)
-
-	case "command":
-		a.barrierCommand(w, r, barrier)
-
-	default:
-		writeJSON(
-			w,
-			http.StatusNotFound,
-			map[string]string{
-				"status": "error",
-				"error":  "route not found",
-			},
-		)
-	}
+func (a *API) barrierForLane(
+	lane *lanes.Lane,
+	name string,
+) (*devices.Barrier, bool) {
+	barrier, ok := a.gateBarriers[lane.ID][name]
+	return barrier, ok && barrier != nil
 }
 
-func (a *API) barrierStatus(
+func (a *API) barrierState(
 	w http.ResponseWriter,
 	r *http.Request,
-	barrier *devices.Barrier,
+	lane *lanes.Lane,
 ) {
-	if r.Method != http.MethodGet {
-		writeJSON(
-			w,
-			http.StatusMethodNotAllowed,
-			map[string]string{
-				"status": "error",
-				"error":  "method not allowed",
-			},
-		)
-
+	barrier, ok := a.barrierForLane(lane, r.PathValue("barrier"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"success": false,
+			"message": "Шлагбаум не найден",
+			"data":    nil,
+		})
 		return
 	}
 
 	status, err := barrier.Status()
 	if err != nil {
-		writeJSON(
-			w,
-			http.StatusServiceUnavailable,
-			map[string]string{
-				"status": "error",
-				"error":  err.Error(),
-			},
-		)
-
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false,
+			"message": err.Error(),
+			"data":    nil,
+		})
 		return
 	}
 
-	response := plcStatusResponse{
-		Status: "ok",
+	var state int
 
-		Mode:     status.Mode.String(),
-		ModeCode: int32(status.Mode),
-
-		State:     status.State.String(),
-		StateCode: int32(status.State),
-
-		ActualState:     status.ActualState.String(),
-		ActualStateCode: int32(status.ActualState),
-
-		LastCommand:     status.LastCommand.String(),
-		LastCommandCode: int32(status.LastCommand),
-
-		Alarm:   uint16(status.Alarm),
-		Warning: status.Warning,
-		Locked:  status.Locked,
-
-		OperationTime: status.OperationTime,
-		WaitingTime:   status.WaitingTime,
-		Attempts:      status.Attempts,
-		AttemptPeriod: status.AttemptPeriod,
+	switch status.State {
+	case plc.StateInit:
+		state = 0
+	case plc.StateClosed:
+		state = 1
+	case plc.StateOpening:
+		state = 2
+	case plc.StateOpened:
+		state = 3
+	case plc.StateClosing:
+		state = 4
+	case plc.StateAlarm:
+		state = 5
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false,
+			"message": "Нет соответствия состояния PLC состоянию UDTGate",
+			"data":    nil,
+		})
+		return
 	}
 
-	writeJSON(
-		w,
-		http.StatusOK,
-		response,
-	)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": "OK",
+		"data":    state,
+	})
 }
 
 func (a *API) barrierCommand(
 	w http.ResponseWriter,
 	r *http.Request,
-	barrier *devices.Barrier,
+	lane *lanes.Lane,
 ) {
-	if r.Method != http.MethodPost {
-		writeJSON(
-			w,
-			http.StatusMethodNotAllowed,
-			map[string]string{
-				"status": "error",
-				"error":  "method not allowed",
-			},
-		)
-
+	barrier, ok := a.barrierForLane(lane, r.PathValue("barrier"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"success": false,
+			"message": "Шлагбаум не найден",
+			"data":    nil,
+		})
 		return
 	}
 
-	if lane, ok := a.barrierLane[barrier.ID]; ok &&
-		lane.Mode() == lanes.ModeAutomatic {
-		log.Printf(
-			"[barrier %s] command rejected (interlock): lane in automatic",
-			barrier.ID,
-		)
-		writeJSON(
-			w,
-			http.StatusConflict,
-			map[string]string{
-				"status": "error",
-				"error":  "прямое управление запрещено: линия в режиме automatic, остановите автоматику линии",
-			},
-		)
-
+	if lane.Mode() == lanes.ModeAutomatic {
+		writeJSON(w, http.StatusLocked, map[string]any{
+			"success": false,
+			"message": "Прямое управление запрещено: линия в automatic",
+			"data":    nil,
+		})
 		return
 	}
 
-	var request plcCommandRequest
+	command := strings.ToLower(r.PathValue("command"))
 
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
+	if command == "command" {
+		var request struct {
+			Command *int `json:"command"`
+		}
 
-	if err := decoder.Decode(&request); err != nil {
-		writeJSON(
-			w,
-			http.StatusBadRequest,
-			map[string]string{
-				"status": "error",
-				"error":  "invalid JSON body",
-			},
-		)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
 
-		return
+		if err := decoder.Decode(&request); err != nil || request.Command == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"success": false,
+				"message": "Неверный формат команды",
+				"data":    nil,
+			})
+			return
+		}
+
+		switch *request.Command {
+		case 1:
+			command = "stop"
+		case 2:
+			command = "start"
+		case 3:
+			command = "startreverse"
+		case 4:
+			command = "open"
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"success": false,
+				"message": "Неизвестная команда",
+				"data":    nil,
+			})
+			return
+		}
 	}
-
-	command := strings.ToLower(
-		strings.TrimSpace(request.Command),
-	)
 
 	var err error
 
 	switch command {
 	case "start":
 		err = barrier.Start()
-
-	case "reverse":
+	case "startreverse":
 		err = barrier.StartReverse()
-
 	case "stop":
 		err = barrier.Stop()
-
+	case "reset", "resetalarm":
+		err = barrier.Reset()
 	case "open":
 		err = barrier.Open()
-
 	case "close":
 		err = barrier.Close()
-
-	case "reset":
-		err = barrier.Reset()
-
 	default:
-		writeJSON(
-			w,
-			http.StatusBadRequest,
-			map[string]string{
-				"status": "error",
-				"error":  "unknown barrier command",
-			},
-		)
-
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"success": false,
+			"message": "Неизвестная команда",
+			"data":    nil,
+		})
 		return
 	}
 
 	if err != nil {
-		log.Printf(
-			"[barrier %s] command %s FAILED: %v",
-			barrier.ID, command, err,
-		)
-		writeJSON(
-			w,
-			http.StatusServiceUnavailable,
-			map[string]string{
-				"status": "error",
-				"error":  err.Error(),
-			},
-		)
-
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false,
+			"message": err.Error(),
+			"data":    nil,
+		})
 		return
 	}
 
-	log.Printf("[barrier %s] command %s accepted", barrier.ID, command)
-
-	writeJSON(
-		w,
-		http.StatusAccepted,
-		plcCommandResponse{
-			Status:  "accepted",
-			Command: command,
-		},
-	)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": "Команда выполнена успешно",
+		"data":    command,
+	})
 }

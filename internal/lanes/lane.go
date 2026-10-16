@@ -33,13 +33,14 @@ type Lane struct {
 	sources     []*devices.Source
 	services    map[string]*axxon.Client
 
-	mu            sync.Mutex
-	mode          Mode
-	activeVehicle *VehicleContext
-	lastState     lanestatus.State
-	pending       []*VehicleContext
-	queue         []*VehicleContext
-	queueDepth    int
+	mu                sync.Mutex
+	mode              Mode
+	activeVehicle     *VehicleContext
+	lastState         lanestatus.State
+	pending           []*VehicleContext
+	queue             []*VehicleContext
+	queueDepth        int
+	BidirectionalMode bool
 
 	photoVehicleID         string
 	photo                  []byte
@@ -60,6 +61,7 @@ func New(
 	sources []*devices.Source,
 	services map[string]*axxon.Client,
 	queueDepth int,
+	bidirectionalMode bool,
 ) (*Lane, error) {
 	if id == "" {
 		return nil, errors.New("ID линии не указан")
@@ -73,16 +75,17 @@ func New(
 	}
 
 	return &Lane{
-		ID:           id,
-		Name:         name,
-		CheckpointID: checkpointID,
-		Scenario:     scenario,
-		releaseMode:  scenario.ReleaseMode(),
-		decider:      decider,
-		sources:      sources,
-		services:     services,
-		mode:         defaultMode,
-		queueDepth:   queueDepth,
+		ID:                id,
+		Name:              name,
+		CheckpointID:      checkpointID,
+		Scenario:          scenario,
+		releaseMode:       scenario.ReleaseMode(),
+		decider:           decider,
+		sources:           sources,
+		services:          services,
+		mode:              defaultMode,
+		queueDepth:        queueDepth,
+		BidirectionalMode: bidirectionalMode,
 	}, nil
 }
 

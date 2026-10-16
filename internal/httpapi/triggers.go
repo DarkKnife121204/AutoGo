@@ -60,47 +60,26 @@ func (a *API) codeTrigger(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	if r.Method != http.MethodPost {
-		writeJSON(
-			w,
-			http.StatusMethodNotAllowed,
-			map[string]string{
-				"status": "error",
-				"error":  "method not allowed",
-			},
-		)
-
-		return
-	}
-
 	var request codeTriggerRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeJSON(
-			w,
-			http.StatusBadRequest,
-			map[string]string{
-				"status": "error",
-				"error":  "invalid JSON body",
-			},
-		)
-
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false,
+			"message": "Ошибка данных",
+		})
 		return
 	}
 
 	sender := strings.TrimSpace(request.Sender)
 	content := strings.TrimSpace(request.Content)
+	title := strings.TrimSpace(request.Title)
 
-	if sender == "" || content == "" {
-		writeJSON(
-			w,
-			http.StatusBadRequest,
-			map[string]string{
-				"status": "error",
-				"error":  "нужны поля sender и content",
-			},
-		)
-
+	if sender == "" || content == "" || title == "" ||
+		len([]rune(request.Title)) > 100 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false,
+			"message": "Ошибка данных",
+		})
 		return
 	}
 
@@ -120,9 +99,9 @@ func (a *API) dispatchPlateTrigger(
 ) {
 	target, exists := a.triggerIndex[indexKey]
 	if !exists {
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"status": "error",
-			"error":  "источник не привязан ни к одной линии: " + indexKey,
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"success": false,
+			"message": "Камера не найдена",
 		})
 		return
 	}
@@ -132,16 +111,15 @@ func (a *API) dispatchPlateTrigger(
 		plate,
 		target.Direction,
 	); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"status": "error",
-			"error":  err.Error(),
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false,
+			"message": "Внутренняя ошибка сервера",
 		})
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status": "accepted",
-		"lane":   target.Lane.ID,
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
 	})
 }
 
@@ -153,9 +131,9 @@ func (a *API) dispatchKeyCodeTrigger(
 ) {
 	target, exists := a.triggerIndex[indexKey]
 	if !exists {
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"status": "error",
-			"error":  "источник не привязан ни к одной линии: " + indexKey,
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"success": false,
+			"message": "Клавиатура не найдена",
 		})
 		return
 	}
@@ -165,15 +143,14 @@ func (a *API) dispatchKeyCodeTrigger(
 		keyCode,
 		target.Direction,
 	); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"status": "error",
-			"error":  err.Error(),
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false,
+			"message": "Внутренняя ошибка сервера",
 		})
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status": "accepted",
-		"lane":   target.Lane.ID,
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
 	})
 }

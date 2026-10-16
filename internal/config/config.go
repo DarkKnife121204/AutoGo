@@ -51,12 +51,13 @@ type CheckpointConfig struct {
 }
 
 type LaneConfig struct {
-	ID       string         `yaml:"id"`
-	GateName string         `yaml:"gate_name"`
-	Name     string         `yaml:"name"`
-	Mode     string         `yaml:"mode"`
-	Devices  []string       `yaml:"devices"`
-	Scenario ScenarioConfig `yaml:"scenario"`
+	ID                string         `yaml:"id"`
+	GateName          string         `yaml:"gate_name"`
+	Name              string         `yaml:"name"`
+	Mode              string         `yaml:"mode"`
+	Devices           []string       `yaml:"devices"`
+	Scenario          ScenarioConfig `yaml:"scenario"`
+	BidirectionalMode bool           `yaml:"bidirectional_mode"`
 }
 
 type ScenarioConfig struct {

@@ -76,12 +76,10 @@ func main() {
 	)
 
 	api := httpapi.New(
-		rt.Barriers,
-		rt.Lanes,
-		rt.BarrierLane,
 		rt.TriggerIndex,
 		rt.Checkpoints,
 		rt.GateLanes,
+		rt.GateBarriers,
 	)
 
 	server := &http.Server{

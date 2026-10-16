@@ -170,6 +170,7 @@ func buildLanes(
 					collectSources(laneConfig, deviceByID),
 					axxonServices,
 					laneConfig.Scenario.Settings.QueueDepth,
+					laneConfig.BidirectionalMode,
 				)
 				if err != nil {
 					return nil, nil, nil, err
@@ -249,6 +250,7 @@ func buildLanes(
 					collectSources(laneConfig, deviceByID),
 					axxonServices,
 					laneConfig.Scenario.Settings.QueueDepth,
+					laneConfig.BidirectionalMode,
 				)
 				if err != nil {
 					return nil, nil, nil, err

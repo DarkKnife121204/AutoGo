@@ -20,6 +20,7 @@ type Runtime struct {
 	TriggerIndex map[string]lanes.TriggerTarget
 	Checkpoints  map[string]*checkpoints.Checkpoint
 	GateLanes    map[string]*lanes.Lane
+	GateBarriers map[string]map[string]*devices.Barrier
 }
 
 func Build(cfg config.Config) (*Runtime, error) {
@@ -70,6 +71,25 @@ func Build(cfg config.Config) (*Runtime, error) {
 		}
 	}
 
+	gateBarriers := make(map[string]map[string]*devices.Barrier)
+
+	for _, checkpoint := range cfg.Checkpoints {
+		for _, laneConfig := range checkpoint.Lanes {
+			gates := make(map[string]*devices.Barrier)
+
+			switch laneConfig.Scenario.Type {
+			case config.ScenarioTypeSingleBarrier:
+				gates["Gate1"] = barriers[laneConfig.Scenario.Settings.Barrier]
+
+			case config.ScenarioTypeDoubleBarrier:
+				gates["Gate1"] = barriers[laneConfig.Scenario.Settings.EntryBarrier]
+				gates["Gate2"] = barriers[laneConfig.Scenario.Settings.ExitBarrier]
+			}
+
+			gateBarriers[laneConfig.ID] = gates
+		}
+	}
+
 	return &Runtime{
 		AxxonServices: axxonServices,
 		Controllers:   controllers,
@@ -79,6 +99,7 @@ func Build(cfg config.Config) (*Runtime, error) {
 		TriggerIndex:  triggerIndex,
 		Checkpoints:   siteCheckpoints,
 		GateLanes:     gateLanes,
+		GateBarriers:  gateBarriers,
 	}, nil
 }
 
