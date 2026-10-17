@@ -14,15 +14,30 @@ type Emulator struct {
 	operationID      uint64
 	operationStarted time.Time
 
-	state       plc.State
-	actualState plc.ActualState
+	state        plc.State
+	actualState  plc.ActualState
+	testScenario string
 
 	openDuration     time.Duration
 	transferDuration time.Duration
 	closeDuration    time.Duration
 }
 
-func New(openDuration time.Duration, transferDuration time.Duration, closeDuration time.Duration) (*Emulator, error) {
+func New(
+	openDuration time.Duration,
+	transferDuration time.Duration,
+	closeDuration time.Duration,
+	testScenario string,
+) (*Emulator, error) {
+	switch testScenario {
+	case "none", "no_event", "opening_fault", "closing_fault":
+	default:
+		return nil, fmt.Errorf(
+			"неизвестный тестовый сценарий PLC: %q",
+			testScenario,
+		)
+	}
+
 	emulator := &Emulator{
 		store:            NewDataStore(),
 		state:            plc.StateInit,
@@ -30,6 +45,7 @@ func New(openDuration time.Duration, transferDuration time.Duration, closeDurati
 		openDuration:     openDuration,
 		transferDuration: transferDuration,
 		closeDuration:    closeDuration,
+		testScenario:     testScenario,
 	}
 
 	if err := emulator.initialize(); err != nil {
@@ -108,7 +124,7 @@ func (e *Emulator) initialize() error {
 		return err
 	}
 
-	if err := e.store.WriteFloat32(
+	if err := e.store.WriteInt32(
 		plc.RegisterOutOperationTime,
 		0,
 	); err != nil {

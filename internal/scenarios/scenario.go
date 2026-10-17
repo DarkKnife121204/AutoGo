@@ -31,6 +31,9 @@ type Scenario interface {
 	Open() error
 	Close() error
 	Reset() error
+	Cancel() error
+	RecoverNotReady() error
+	Resume() error
 
 	Snapshot() (lanestatus.Snapshot, error)
 }

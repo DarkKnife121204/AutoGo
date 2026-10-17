@@ -32,7 +32,12 @@ func main() {
 	)
 
 	unitID := getUint8("MODBUS_UNIT_ID", 1)
+	testScenario := getEnv(
+		"PLC_EMULATOR_TEST_SCENARIO",
+		"none",
+	)
 
+	log.Printf("Test scenario: %s", testScenario)
 	log.Printf("PLC Emulator")
 	log.Printf("Unit ID: %d", unitID)
 	log.Printf("Open duration: %s", openDuration)
@@ -43,6 +48,7 @@ func main() {
 		openDuration,
 		transferDuration,
 		closeDuration,
+		testScenario,
 	)
 	if err != nil {
 		log.Fatalf("ошибка создания эмулятора: %v", err)

@@ -27,6 +27,7 @@ const (
 	stageIdle passageStage = iota
 	stageStarting
 	stageMoving
+	stageAlarm
 )
 
 type SingleBarrier struct {
@@ -109,10 +110,24 @@ func (s *SingleBarrier) Advance() (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if plcStatus.HasAlarm() || phase == lanestatus.PhaseError {
-		s.stage = stageIdle
+	if s.stage == stageAlarm {
+		return false, nil
+	}
 
-		return true, nil
+	if plcStatus.HasAlarm() || phase == lanestatus.PhaseError {
+		s.stage = stageAlarm
+
+		return false, nil
+	}
+
+	if plcStatus.State == plc.StateClosed &&
+		plcStatus.HasAlarmFlag(plc.AlarmNoEvent) {
+		return false, nil
+	}
+
+	if phase == lanestatus.PhaseNotReady {
+		s.stage = stageAlarm
+		return false, nil
 	}
 
 	switch s.stage {
@@ -124,9 +139,10 @@ func (s *SingleBarrier) Advance() (bool, error) {
 		}
 
 		if time.Since(s.startedAt) > singleStartTimeout {
-			s.stage = stageIdle
+			log.Printf("[single] PLC не начал операцию за %s", singleStartTimeout)
+			s.stage = stageAlarm
 
-			return true, nil
+			return false, nil
 		}
 
 	case stageMoving:
@@ -173,6 +189,50 @@ func (s *SingleBarrier) Reset() error {
 	return nil
 }
 
+func (s *SingleBarrier) Cancel() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.barrier.Stop(); err != nil {
+		return err
+	}
+
+	s.stage = stageIdle
+	s.startedAt = time.Time{}
+
+	return nil
+}
+
+func (s *SingleBarrier) RecoverNotReady() error {
+	status, err := s.barrier.Status()
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case status.State == plc.StateAlarm || status.HasAlarm():
+		err = s.barrier.Reset()
+
+	case status.State != plc.StateClosed:
+		err = s.barrier.Stop()
+	}
+
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.stage = stageIdle
+	s.startedAt = time.Time{}
+	s.mu.Unlock()
+
+	return nil
+}
+
+func (s *SingleBarrier) Resume() error {
+	return nil
+}
+
 func (s *SingleBarrier) Confirm() error {
 	return errors.New(
 		"подтверждение неприменимо для сценария single_barrier",
@@ -191,10 +251,21 @@ func (s *SingleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 		return lanestatus.Snapshot{}, err
 	}
 
+	s.mu.Lock()
+	alarm := s.stage == stageAlarm ||
+		plcStatus.HasAlarm() ||
+		plcStatus.State == plc.StateAlarm
+	s.mu.Unlock()
+
+	phase := phaseFromState(plcStatus.State)
+	if alarm {
+		phase = lanestatus.PhaseError
+	}
+
 	return lanestatus.Snapshot{
-		Phase: phaseFromState(plcStatus.State),
-		Alarm: plcStatus.HasAlarm(),
-		Ready: plcStatus.State == plc.StateClosed,
+		Phase: phase,
+		Alarm: alarm,
+		Ready: !alarm && plcStatus.State == plc.StateClosed,
 		Devices: map[string]lanestatus.DeviceStatus{
 			s.barrier.ID: {
 				Type:       "barrier",
@@ -219,6 +290,8 @@ func (s *SingleBarrier) PrevState() error {
 
 func phaseFromState(state plc.State) lanestatus.Phase {
 	switch state {
+	case plc.StateClosed:
+		return lanestatus.PhaseIdle
 	case plc.StateOpening:
 		return lanestatus.PhaseOpening
 	case plc.StateOpened:
@@ -228,6 +301,6 @@ func phaseFromState(state plc.State) lanestatus.Phase {
 	case plc.StateAlarm:
 		return lanestatus.PhaseError
 	default:
-		return lanestatus.PhaseIdle
+		return lanestatus.PhaseNotReady
 	}
 }

@@ -17,27 +17,13 @@ func (e *Emulator) commandLoop() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		commandValue, err := e.store.ReadInt32(plc.RegisterInCommand)
-		if err != nil {
-			log.Printf("ошибка чтения команды: %v", err)
-			continue
-		}
-
-		command := plc.Command(commandValue)
+		command := e.store.TakeCommand()
 
 		if command == plc.CommandNone {
 			continue
 		}
 
 		e.handleCommand(command)
-
-		if err := e.store.WriteInt32(
-			plc.RegisterInCommand,
-			int32(plc.CommandNone),
-		); err != nil {
-			log.Printf("ошибка очистки команды: %v", err)
-			continue
-		}
 	}
 }
 
@@ -63,8 +49,6 @@ func (e *Emulator) handleCommand(command plc.Command) {
 		e.stop()
 	case plc.CommandReset:
 		e.reset()
-	case plc.CommandClose:
-		e.close()
 	default:
 		log.Printf("PLC: неизвестная команда %d", command)
 	}

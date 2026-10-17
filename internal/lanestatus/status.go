@@ -3,11 +3,12 @@ package lanestatus
 type Phase string
 
 const (
-	PhaseIdle    Phase = "idle"
-	PhaseOpening Phase = "opening"
-	PhaseOpened  Phase = "opened"
-	PhaseClosing Phase = "closing"
-	PhaseError   Phase = "error"
+	PhaseIdle     Phase = "idle"
+	PhaseOpening  Phase = "opening"
+	PhaseOpened   Phase = "opened"
+	PhaseClosing  Phase = "closing"
+	PhaseError    Phase = "error"
+	PhaseNotReady Phase = "not_ready"
 )
 
 type State string

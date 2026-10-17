@@ -13,7 +13,7 @@ func (e *Emulator) initState() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if e.state != plc.StateInit {
+	if e.operationID != 0 || e.state != plc.StateInit {
 		return
 	}
 
@@ -28,10 +28,7 @@ func (e *Emulator) initState() {
 }
 
 func (e *Emulator) open() {
-	operationID, ok := e.beginOperation(
-		plc.StateClosed,
-		plc.StateStopped,
-	)
+	operationID, ok := e.beginOperation(plc.StateClosed)
 	if !ok {
 		return
 	}
@@ -50,15 +47,13 @@ func (e *Emulator) open() {
 			operationID,
 			plc.StateOpened,
 			plc.ActualStateOpened,
+			plc.AlarmNone,
 		)
 	}()
 }
 
 func (e *Emulator) close() {
-	operationID, ok := e.beginOperation(
-		plc.StateOpened,
-		plc.StateStopped,
-	)
+	operationID, ok := e.beginOperation(plc.StateOpened)
 	if !ok {
 		return
 	}
@@ -77,6 +72,7 @@ func (e *Emulator) close() {
 			operationID,
 			plc.StateClosed,
 			plc.ActualStateClosed,
+			plc.AlarmNone,
 		)
 	}()
 }
@@ -94,6 +90,14 @@ func (e *Emulator) startCycle() {
 			plc.ActualStateIntermediate,
 			e.openDuration,
 		) {
+			return
+		}
+
+		if e.testScenario == "opening_fault" {
+			e.failOperation(
+				operationID,
+				plc.AlarmBarrierAlarmOpen,
+			)
 			return
 		}
 
@@ -115,17 +119,30 @@ func (e *Emulator) startCycle() {
 			return
 		}
 
+		if e.testScenario == "closing_fault" {
+			e.failOperation(
+				operationID,
+				plc.AlarmBarrierAlarmClose,
+			)
+			return
+		}
+
+		alarm := plc.AlarmNone
+
+		if e.testScenario == "no_event" {
+			alarm = plc.AlarmNoEvent
+		}
+
 		e.finishOperation(
 			operationID,
 			plc.StateClosed,
 			plc.ActualStateClosed,
+			alarm,
 		)
 	}()
 }
 
 func (e *Emulator) startReverseCycle() {
-	// Пока физическая эмуляция совпадает с прямым циклом.
-	// Разница появится после добавления датчиков направления.
 	e.startCycle()
 }
 
@@ -135,22 +152,22 @@ func (e *Emulator) stop() {
 
 	e.operationID++
 
-	if err := e.setState(plc.StateStopped); err != nil {
-		log.Printf("ошибка остановки: %v", err)
-		return
-	}
+	var nextState plc.State
 
 	switch e.actualState {
-	case plc.ActualStateClosed, plc.ActualStateOpened:
+	case plc.ActualStateClosed:
+		nextState = plc.StateClosed
+
+	case plc.ActualStateOpened:
+		nextState = plc.StateOpened
+
 	default:
-		if err := e.setActualState(
-			plc.ActualStateIntermediate,
-		); err != nil {
-			log.Printf(
-				"ошибка установки промежуточного положения: %v",
-				err,
-			)
-		}
+		nextState = plc.StateInit
+	}
+
+	if err := e.setState(nextState); err != nil {
+		log.Printf("ошибка остановки: %v", err)
+		return
 	}
 
 	log.Println("PLC: операция остановлена")
@@ -161,13 +178,16 @@ func (e *Emulator) reset() {
 	defer e.mu.Unlock()
 
 	e.operationID++
+	operationID := e.operationID
 
-	if err := e.store.WriteUint16(
-		plc.RegisterOutAlarm,
-		uint16(plc.AlarmNone),
-	); err != nil {
-		log.Printf("ошибка сброса аварии: %v", err)
-		return
+	if e.actualState != plc.ActualStateInvalid {
+		if err := e.store.WriteUint16(
+			plc.RegisterOutAlarm,
+			uint16(plc.AlarmNone),
+		); err != nil {
+			log.Printf("ошибка сброса аварии: %v", err)
+			return
+		}
 	}
 
 	if err := e.setState(plc.StateInit); err != nil {
@@ -175,16 +195,16 @@ func (e *Emulator) reset() {
 		return
 	}
 
-	go e.determineStateAfterReset()
+	go e.determineStateAfterReset(operationID)
 }
 
-func (e *Emulator) determineStateAfterReset() {
+func (e *Emulator) determineStateAfterReset(operationID uint64) {
 	time.Sleep(500 * time.Millisecond)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if e.state != plc.StateInit {
+	if operationID != e.operationID || e.state != plc.StateInit {
 		return
 	}
 
@@ -200,21 +220,8 @@ func (e *Emulator) determineStateAfterReset() {
 		}
 
 	case plc.ActualStateInvalid:
-		if err := e.store.WriteUint16(
-			plc.RegisterOutAlarm,
-			uint16(plc.AlarmLimitConflict),
-		); err != nil {
-			log.Printf("ошибка записи аварии: %v", err)
-			return
-		}
-
 		if err := e.setState(plc.StateAlarm); err != nil {
 			log.Printf("ошибка перехода в Alarm: %v", err)
-		}
-
-	default:
-		if err := e.setState(plc.StateStopped); err != nil {
-			log.Printf("ошибка определения Stopped: %v", err)
 		}
 	}
 }
@@ -239,7 +246,7 @@ func (e *Emulator) beginOperation(
 
 	operationID := e.operationID
 
-	if err := e.store.WriteFloat32(
+	if err := e.store.WriteInt32(
 		plc.RegisterOutOperationTime,
 		0,
 	); err != nil {
@@ -282,9 +289,9 @@ func (e *Emulator) trackOperationTime(operationID uint64) {
 
 		e.mu.Unlock()
 
-		if err := e.store.WriteFloat32(
+		if err := e.store.WriteInt32(
 			plc.RegisterOutOperationTime,
-			float32(elapsed),
+			int32(elapsed),
 		); err != nil {
 			log.Printf(
 				"ошибка записи времени операции: %v",
@@ -343,10 +350,9 @@ func (e *Emulator) transition(
 	return active
 }
 
-func (e *Emulator) finishOperation(
+func (e *Emulator) failOperation(
 	operationID uint64,
-	state plc.State,
-	actualState plc.ActualState,
+	alarm plc.Alarm,
 ) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -355,13 +361,54 @@ func (e *Emulator) finishOperation(
 		return
 	}
 
+	e.operationID++
+
+	if err := e.store.WriteUint16(
+		plc.RegisterOutAlarm,
+		uint16(alarm),
+	); err != nil {
+		log.Printf("ошибка установки тестовой аварии: %v", err)
+		return
+	}
+
+	if err := e.setState(plc.StateAlarm); err != nil {
+		log.Printf("ошибка перехода в Alarm: %v", err)
+		return
+	}
+
+	log.Printf("PLC: тестовая авария %d", alarm)
+}
+
+func (e *Emulator) finishOperation(
+	operationID uint64,
+	state plc.State,
+	actualState plc.ActualState,
+	alarm plc.Alarm,
+) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if operationID != e.operationID {
+		return
+	}
+
+	if alarm != plc.AlarmNone {
+		if err := e.store.WriteUint16(
+			plc.RegisterOutAlarm,
+			uint16(alarm),
+		); err != nil {
+			log.Printf("ошибка записи результата операции: %v", err)
+			return
+		}
+	}
+
 	elapsed := time.Since(
 		e.operationStarted,
 	).Seconds()
 
-	if err := e.store.WriteFloat32(
+	if err := e.store.WriteInt32(
 		plc.RegisterOutOperationTime,
-		float32(elapsed),
+		int32(elapsed),
 	); err != nil {
 		log.Printf("ошибка записи времени операции: %v", err)
 	}

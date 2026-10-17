@@ -208,7 +208,7 @@ func (c *Client) writeRegisters(
 
 		if reconnectErr != nil {
 			return fmt.Errorf(
-				"запись регистров начиная с HR%d: %w",
+				"запись регистров начиная с HR%d: результат операции неизвестен: %w",
 				address,
 				errors.Join(err, reconnectErr),
 			)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"AutoGo/internal/lanes"
+	"AutoGo/internal/lanestatus"
 )
 
 func (a *API) laneContext(
@@ -34,6 +35,9 @@ func (a *API) makeLaneContext(
 	}
 
 	photo, photoCapturedAt, photoCaptureInProgress := lane.Photo()
+
+	cachedPlate, plateCachedAt, cachedKey, keyCachedAt :=
+		lane.CachedIdentification()
 
 	response := laneContextResponse{
 		CurrentState:        string(status.State),
@@ -96,6 +100,32 @@ func (a *API) makeLaneContext(
 		}
 	}
 
+	if cachedPlate != "" || cachedKey != "" {
+		identification := cachedIdentificationResponse{
+			Direction: "In",
+		}
+
+		if cachedPlate != "" {
+			plate := cachedPlate
+			captureTime := plateCachedAt
+
+			identification.PlateNumber = &plate
+			identification.DetectionTime = &captureTime
+		}
+
+		if cachedKey != "" {
+			key := cachedKey
+			identification.KeyCode = &key
+
+			if identification.DetectionTime == nil {
+				detectionTime := keyCachedAt
+				identification.DetectionTime = &detectionTime
+			}
+		}
+
+		response.VehicleContext.CachedData.CachedIdentification = &identification
+	}
+
 	return response, nil
 }
 
@@ -155,7 +185,34 @@ func (a *API) laneCommand(
 		return
 	}
 
-	var err error
+	switch request.CommandType {
+	case "NextState", "PrevState", "Reset", "ResetAlarm",
+		"Stop", "Start", "Back":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"errorType": "InvalidCommand",
+			"message":   "Неизвестная команда",
+		})
+		return
+	}
+
+	status, err := lane.Status()
+
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"errorType": "InternalError",
+			"message":   "Не удалось получить состояние линии: " + err.Error(),
+		})
+		return
+	}
+
+	if !isCommandAllowed(status.State, request.CommandType) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"errorType": "InvalidState",
+			"message":   "Invalid request - command cannot be executed in current state",
+		})
+		return
+	}
 
 	switch request.CommandType {
 	case "NextState":
@@ -164,7 +221,7 @@ func (a *API) laneCommand(
 	case "PrevState":
 		err = lane.PrevState()
 
-	case "Reset":
+	case "Reset", "ResetAlarm":
 		err = lane.Reset()
 
 	case "Start":
@@ -172,6 +229,9 @@ func (a *API) laneCommand(
 
 	case "Stop":
 		err = lane.Stop()
+
+	case "Back":
+		err = lane.Reject()
 
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -209,4 +269,45 @@ func (a *API) laneCommand(
 		"message":        "Команда " + request.CommandType + " выполнена успешно",
 		"updatedContext": context,
 	})
+}
+
+func isCommandAllowed(state lanestatus.State, command string) bool {
+	switch state {
+	case lanestatus.StateNotReady:
+		return command == "Reset" || command == "ResetAlarm"
+
+	case lanestatus.StateIdentEntrance:
+		return command == "Reset" || command == "Stop"
+
+	case lanestatus.StateWaitingTransfer1,
+		lanestatus.StateWaitingTransfer2:
+		return command == "NextState" ||
+			command == "PrevState" ||
+			command == "Reset" ||
+			command == "Stop"
+
+	case lanestatus.StateConfirm:
+		return command == "NextState" ||
+			command == "PrevState" ||
+			command == "Reset" ||
+			command == "Stop" ||
+			command == "Back"
+
+	case lanestatus.StateAlarm:
+		return command == "Reset" ||
+			command == "ResetAlarm" ||
+			command == "PrevState"
+
+	case lanestatus.StateStopping:
+		return command == "Start" || command == "Reset"
+
+	case lanestatus.StateRollingBack:
+		return command == "Reset"
+
+	case lanestatus.StateWaitingTransfer:
+		return command == "Reset" || command == "Stop"
+
+	default:
+		return command == "Reset"
+	}
 }

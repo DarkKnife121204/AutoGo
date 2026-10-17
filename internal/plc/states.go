@@ -3,31 +3,28 @@ package plc
 type State int32
 
 const (
-	StateInit    State = 0
-	StateClosed  State = 1
-	StateOpening State = 2
-	StateOpened  State = 3
-	StateClosing State = 4
-	StateStopped State = 5
-	StateAlarm   State = 6
+	StateClosed  State = 1 // UDTGate: Waiting
+	StateOpened  State = 2 // UDTGate: WaitingTransfer
+	StateOpening State = 3 // UDTGate: OpeningBarrier
+	StateClosing State = 4 // UDTGate: ClosingBarrier
+	StateAlarm   State = 5 // UDTGate: Alarm
+	StateInit    State = 6 // UDTGate: Init
 )
 
 func (s State) String() string {
 	switch s {
-	case StateInit:
-		return "Init"
 	case StateClosed:
-		return "Closed"
-	case StateOpening:
-		return "Opening"
+		return "Waiting"
 	case StateOpened:
-		return "Opened"
+		return "WaitingTransfer"
+	case StateOpening:
+		return "OpeningBarrier"
 	case StateClosing:
-		return "Closing"
-	case StateStopped:
-		return "Stopped"
+		return "ClosingBarrier"
 	case StateAlarm:
 		return "Alarm"
+	case StateInit:
+		return "Init"
 	default:
 		return "Unknown"
 	}

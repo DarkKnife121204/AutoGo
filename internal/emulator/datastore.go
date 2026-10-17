@@ -154,3 +154,20 @@ func validateRange(
 
 	return nil
 }
+
+func (s *DataStore) TakeCommand() plc.Command {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	address := plc.RegisterInCommand
+
+	value := plc.DecodeInt32(
+		s.registers[address],
+		s.registers[address+1],
+	)
+
+	s.registers[address] = 0
+	s.registers[address+1] = 0
+
+	return plc.Command(value)
+}

@@ -7,17 +7,17 @@ import (
 )
 
 type Status struct {
-	Mode          plc.Mode
+	Mode          int32
 	State         plc.State
-	ActualState   plc.ActualState
+	ActualState   int32
 	Alarm         plc.Alarm
-	Warning       uint16
-	Locked        bool
-	LastCommand   plc.Command
-	OperationTime float32
+	Warning       int16
+	Locked        int32
+	OperationTime int32
 	WaitingTime   float32
-	Attempts      uint16
+	Attempts      int16
 	AttemptPeriod float32
+	OutCommand    int32
 }
 
 func (c *Client) Status() (Status, error) {
@@ -41,34 +41,34 @@ func (c *Client) Status() (Status, error) {
 	}
 
 	status := Status{
-		Mode: plc.Mode(
-			decodeInt32(registers, plc.RegisterOutMode),
+		Mode: decodeInt32(
+			registers,
+			plc.RegisterOutMode,
 		),
 
 		State: plc.State(
 			decodeInt32(registers, plc.RegisterOutState),
 		),
 
-		ActualState: plc.ActualState(
-			decodeInt32(registers, plc.RegisterOutStateActual),
-		),
+		ActualState: decodeInt32(registers, plc.RegisterOutStateActual),
 
 		Alarm: plc.Alarm(
 			registers[plc.RegisterOutAlarm],
 		),
 
-		Warning: registers[plc.RegisterOutWarning],
+		Warning: int16(registers[plc.RegisterOutWarning]),
 
 		Locked: decodeInt32(
 			registers,
 			plc.RegisterOutLocked,
-		) != 0,
-
-		LastCommand: plc.Command(
-			decodeInt32(registers, plc.RegisterOutCommand),
 		),
 
-		OperationTime: decodeFloat32(
+		OutCommand: decodeInt32(
+			registers,
+			plc.RegisterOutCommand,
+		),
+
+		OperationTime: decodeInt32(
 			registers,
 			plc.RegisterOutOperationTime,
 		),
@@ -78,7 +78,7 @@ func (c *Client) Status() (Status, error) {
 			plc.RegisterTimeWaiting,
 		),
 
-		Attempts: registers[plc.RegisterNumAttempts],
+		Attempts: int16(registers[plc.RegisterNumAttempts]),
 
 		AttemptPeriod: decodeFloat32(
 			registers,
@@ -110,13 +110,10 @@ func decodeFloat32(
 }
 
 func (s Status) HasAlarm() bool {
-	return s.Alarm != plc.AlarmNone
+	return s.Alarm != plc.AlarmNone &&
+		s.Alarm != plc.AlarmNoEvent
 }
 
 func (s Status) HasAlarmFlag(alarm plc.Alarm) bool {
-	if alarm == plc.AlarmNone {
-		return s.Alarm == plc.AlarmNone
-	}
-
-	return s.Alarm&alarm != 0
+	return s.Alarm == alarm
 }

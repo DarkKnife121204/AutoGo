@@ -1,10 +1,8 @@
 package plcclient
 
 import (
-	"fmt"
-	"time"
-
 	"AutoGo/internal/plc"
+	"fmt"
 )
 
 func (c *Client) Start() error {
@@ -24,74 +22,11 @@ func (c *Client) Open() error {
 }
 
 func (c *Client) CloseBarrier() error {
-	return c.sendCommand(plc.CommandClose)
+	return fmt.Errorf("UDTGate не поддерживает команду Close")
 }
 
 func (c *Client) Reset() error {
-	if err := c.sendCommand(plc.CommandReset); err != nil {
-		return err
-	}
-
-	return c.waitCommandAck(
-		plc.CommandReset,
-		5*time.Second,
-	)
-}
-
-func (c *Client) waitCommandAck(
-	command plc.Command,
-	timeout time.Duration,
-) error {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		registers, err := c.readRegisters(
-			0,
-			plc.RegisterOutCommand+2,
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"ожидание подтверждения команды %s: %w",
-				command,
-				err,
-			)
-		}
-
-		inCommand := plc.Command(
-			plc.DecodeInt32(
-				registers[plc.RegisterInCommand],
-				registers[plc.RegisterInCommand+1],
-			),
-		)
-
-		outCommand := plc.Command(
-			plc.DecodeInt32(
-				registers[plc.RegisterOutCommand],
-				registers[plc.RegisterOutCommand+1],
-			),
-		)
-
-		if inCommand == plc.CommandNone &&
-			outCommand == command {
-			return nil
-		}
-
-		select {
-		case <-ticker.C:
-
-		case <-timer.C:
-			return fmt.Errorf(
-				"таймаут подтверждения PLC-команды %s: in=%s out=%s",
-				command,
-				inCommand,
-				outCommand,
-			)
-		}
-	}
+	return c.sendCommand(plc.CommandReset)
 }
 
 func (c *Client) sendCommand(command plc.Command) error {

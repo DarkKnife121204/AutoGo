@@ -24,6 +24,7 @@ const (
 	gateConfirm
 	gateExit
 	gateReject
+	gateAlarm
 )
 
 type DoubleBarrier struct {
@@ -84,14 +85,6 @@ func (d *DoubleBarrier) outbound() *devices.Barrier {
 	return d.exit
 }
 
-func (d *DoubleBarrier) startBarrier(b *devices.Barrier) error {
-	if d.currentDirection == directionReverse {
-		return b.StartReverse()
-	}
-
-	return b.Start()
-}
-
 func (d *DoubleBarrier) Begin(direction string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -108,10 +101,10 @@ func (d *DoubleBarrier) Begin(direction string) error {
 		direction, inbound.ID,
 	)
 
-	if err := d.startBarrier(inbound); err != nil {
+	if err := inbound.Start(); err != nil {
 		d.currentDirection = ""
 
-		log.Printf("[gate] Begin startBarrier error: %v", err)
+		log.Printf("[gate] Begin Start error: %v", err)
 
 		return err
 	}
@@ -136,7 +129,7 @@ func (d *DoubleBarrier) Confirm() error {
 
 	log.Printf("[gate] Confirm: outbound=%s", outbound.ID)
 
-	if err := d.startBarrier(outbound); err != nil {
+	if err := outbound.Start(); err != nil {
 		return err
 	}
 
@@ -160,7 +153,7 @@ func (d *DoubleBarrier) Reject() error {
 
 	log.Printf("[gate] Reject: inbound=%s", inbound.ID)
 
-	if err := d.startBarrier(inbound); err != nil {
+	if err := inbound.Start(); err != nil {
 		return err
 	}
 
@@ -215,9 +208,26 @@ func (d *DoubleBarrier) advanceCycle(
 	}
 
 	if plcStatus.HasAlarm() || phase == lanestatus.PhaseError {
-		d.stage = gateIdle
+		d.stage = gateAlarm
+		d.startedAt = time.Time{}
 
-		return true, nil
+		return false, nil
+	}
+
+	if plcStatus.State == plc.StateClosed &&
+		plcStatus.HasAlarmFlag(plc.AlarmNoEvent) {
+
+		if current == gateExit {
+			log.Printf("[gate] NoEvent: проезд через второй шлагбаум не обнаружен")
+			d.stage = gateAlarm
+			d.startedAt = time.Time{}
+		}
+
+		return false, nil
+	}
+
+	if phase == lanestatus.PhaseNotReady {
+		return false, nil
 	}
 
 	if phase != lanestatus.PhaseIdle {
@@ -232,9 +242,11 @@ func (d *DoubleBarrier) advanceCycle(
 	}
 
 	if time.Since(d.startedAt) > doubleStartTimeout {
-		d.stage = gateIdle
+		log.Printf("[gate] PLC не начал операцию за %s", doubleStartTimeout)
+		d.stage = gateAlarm
+		d.startedAt = time.Time{}
 
-		return true, nil
+		return false, nil
 	}
 
 	return false, nil
@@ -291,6 +303,93 @@ func (d *DoubleBarrier) Reset() error {
 	return nil
 }
 
+func (d *DoubleBarrier) Cancel() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	switch d.stage {
+	case gateEntry, gateEntryHold, gateReject:
+		if err := d.inbound().Stop(); err != nil {
+			return err
+		}
+
+	case gateExit:
+		if err := d.outbound().Stop(); err != nil {
+			return err
+		}
+
+	case gateConfirm:
+
+	default:
+		return errors.New("нет активного проезда для отмены")
+	}
+
+	d.stage = gateIdle
+	d.startedAt = time.Time{}
+	d.currentDirection = ""
+
+	return nil
+}
+
+func (d *DoubleBarrier) RecoverNotReady() error {
+	for _, barrier := range []*devices.Barrier{d.entry, d.exit} {
+		status, err := barrier.Status()
+		if err != nil {
+			return err
+		}
+
+		switch {
+		case status.State == plc.StateAlarm:
+			err = barrier.Reset()
+
+		case status.State != plc.StateClosed:
+			err = barrier.Stop()
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	d.mu.Lock()
+	d.stage = gateIdle
+	d.startedAt = time.Time{}
+	d.currentDirection = ""
+	d.mu.Unlock()
+
+	return nil
+}
+
+func (d *DoubleBarrier) Resume() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var err error
+
+	switch d.stage {
+	case gateEntry, gateEntryHold, gateReject:
+		err = d.inbound().Start()
+
+	case gateExit:
+		err = d.outbound().Start()
+
+	default:
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if d.stage == gateEntryHold {
+		d.stage = gateEntry
+	}
+
+	d.startedAt = time.Now()
+
+	return nil
+}
+
 func (d *DoubleBarrier) waitReadyForStart() error {
 	entryResult := make(chan error, 1)
 	exitResult := make(chan error, 1)
@@ -332,13 +431,19 @@ func (d *DoubleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 		exitPhase,
 	)
 
-	if entryStatus.HasAlarm() || exitStatus.HasAlarm() {
+	alarm := stage == gateAlarm ||
+		entryStatus.HasAlarm() ||
+		exitStatus.HasAlarm() ||
+		entryStatus.State == plc.StateAlarm ||
+		exitStatus.State == plc.StateAlarm
+
+	if alarm {
 		phase = lanestatus.PhaseError
 	}
 
 	return lanestatus.Snapshot{
 		Phase: phase,
-		Alarm: entryStatus.HasAlarm() || exitStatus.HasAlarm(),
+		Alarm: alarm,
 		Ready: entryStatus.State == plc.StateClosed &&
 			exitStatus.State == plc.StateClosed,
 		Stage: gateStageName(stage),
@@ -371,7 +476,7 @@ func (d *DoubleBarrier) NextState() (bool, error) {
 	case gateConfirm:
 		outbound := d.outbound()
 
-		if err := d.startBarrier(outbound); err != nil {
+		if err := outbound.Start(); err != nil {
 			return false, err
 		}
 
@@ -398,10 +503,16 @@ func (d *DoubleBarrier) PrevState() error {
 	defer d.mu.Unlock()
 
 	switch d.stage {
-	case gateConfirm, gateExit:
-		d.stage = gateEntryHold
-		d.startedAt = time.Time{}
+	case gateEntry, gateEntryHold:
+		return nil
 
+	case gateConfirm:
+		if err := d.inbound().Start(); err != nil {
+			return err
+		}
+
+	case gateExit:
+		// Пока нет кэшированного результата валидации
 		return nil
 
 	default:
@@ -409,6 +520,11 @@ func (d *DoubleBarrier) PrevState() error {
 			"prev_state недоступен в текущем состоянии",
 		)
 	}
+
+	d.stage = gateEntry
+	d.startedAt = time.Now()
+
+	return nil
 }
 
 func doubleBarrierPhase(
@@ -418,6 +534,11 @@ func doubleBarrierPhase(
 	if entryPhase == lanestatus.PhaseError ||
 		exitPhase == lanestatus.PhaseError {
 		return lanestatus.PhaseError
+	}
+
+	if entryPhase == lanestatus.PhaseNotReady ||
+		exitPhase == lanestatus.PhaseNotReady {
+		return lanestatus.PhaseNotReady
 	}
 
 	if entryPhase == lanestatus.PhaseOpening ||
@@ -448,6 +569,8 @@ func gateStageName(stage gateStage) string {
 		return "exit"
 	case gateReject:
 		return "reject"
+	case gateAlarm:
+		return "alarm"
 	default:
 		return "idle"
 	}

@@ -165,11 +165,9 @@ func printStatus(client *plcclient.Client) error {
 		return err
 	}
 
-	fmt.Printf(
-		"Mode:             %s (%d)\n",
-		status.Mode,
-		status.Mode,
-	)
+	fmt.Printf("Mode (raw):       %d\n", status.Mode)
+
+	fmt.Printf("Out command (raw): %d\n", status.OutCommand)
 
 	fmt.Printf(
 		"State:            %s (%d)\n",
@@ -178,15 +176,8 @@ func printStatus(client *plcclient.Client) error {
 	)
 
 	fmt.Printf(
-		"Actual state:     %s (%d)\n",
+		"Actual state (raw): %d\n",
 		status.ActualState,
-		status.ActualState,
-	)
-
-	fmt.Printf(
-		"Last command:     %s (%d)\n",
-		status.LastCommand,
-		status.LastCommand,
 	)
 
 	fmt.Printf(
@@ -194,18 +185,12 @@ func printStatus(client *plcclient.Client) error {
 		status.Alarm,
 	)
 
-	fmt.Printf(
-		"Warning:          %d\n",
-		status.Warning,
-	)
+	fmt.Printf("Warning:          %d\n", status.Warning)
+
+	fmt.Printf("Locked (raw):     %d\n", status.Locked)
 
 	fmt.Printf(
-		"Locked:           %t\n",
-		status.Locked,
-	)
-
-	fmt.Printf(
-		"Operation time:   %.2f s\n",
+		"Operation time:   %d\n",
 		status.OperationTime,
 	)
 
