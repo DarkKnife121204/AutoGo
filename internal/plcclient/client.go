@@ -11,7 +11,10 @@ import (
 	modbus "github.com/simonvetter/modbus"
 )
 
-var ErrClosed = errors.New("PLC-клиент закрыт")
+var (
+	ErrClosed              = errors.New("PLC-клиент закрыт")
+	ErrWriteOutcomeUnknown = errors.New("результат записи PLC-команды неизвестен")
+)
 
 type Config struct {
 	Address string
@@ -208,16 +211,16 @@ func (c *Client) writeRegisters(
 
 		if reconnectErr != nil {
 			return fmt.Errorf(
-				"запись регистров начиная с HR%d: результат операции неизвестен: %w",
+				"запись регистров начиная с HR%d: %w",
 				address,
-				errors.Join(err, reconnectErr),
+				errors.Join(ErrWriteOutcomeUnknown, err, reconnectErr),
 			)
 		}
 
 		return fmt.Errorf(
-			"запись регистров начиная с HR%d: результат операции неизвестен: %w",
+			"запись регистров начиная с HR%d: %w",
 			address,
-			err,
+			errors.Join(ErrWriteOutcomeUnknown, err),
 		)
 	}
 

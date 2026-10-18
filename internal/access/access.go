@@ -10,9 +10,19 @@ type Request struct {
 	Direction string
 }
 
+type PlateType string
+
+const (
+	PlateTypeInvalid PlateType = "Invalid"
+	PlateTypeRegular PlateType = "Regular"
+	PlateTypeVIP     PlateType = "VIP"
+	PlateTypeUnknown PlateType = "Unknown"
+)
+
 type Decision struct {
-	Allowed bool
-	Reason  string
+	Allowed   bool
+	PlateType PlateType
+	Reason    string
 }
 
 type Decider interface {

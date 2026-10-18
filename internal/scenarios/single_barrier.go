@@ -99,7 +99,7 @@ func (s *SingleBarrier) Begin(direction string) error {
 	return nil
 }
 
-func (s *SingleBarrier) Advance() (bool, error) {
+func (s *SingleBarrier) Advance(_ bool, _ bool) (bool, error) {
 	plcStatus, err := s.barrier.Status()
 	if err != nil {
 		return false, err
@@ -122,6 +122,10 @@ func (s *SingleBarrier) Advance() (bool, error) {
 
 	if plcStatus.State == plc.StateClosed &&
 		plcStatus.HasAlarmFlag(plc.AlarmNoEvent) {
+		return false, nil
+	}
+
+	if plcStatus.State == plc.StateInit {
 		return false, nil
 	}
 
@@ -213,7 +217,7 @@ func (s *SingleBarrier) RecoverNotReady() error {
 	case status.State == plc.StateAlarm || status.HasAlarm():
 		err = s.barrier.Reset()
 
-	case status.State != plc.StateClosed:
+	case status.State != plc.StateClosed && status.State != plc.StateInit:
 		err = s.barrier.Stop()
 	}
 
@@ -230,7 +234,35 @@ func (s *SingleBarrier) RecoverNotReady() error {
 }
 
 func (s *SingleBarrier) Resume() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	status, err := s.barrier.Status()
+	if err != nil {
+		return err
+	}
+
+	if status.State == plc.StateAlarm || status.HasAlarm() ||
+		status.State == plc.StateInit {
+		return errors.New("возврат из Stopping запрещён: PLC не готов")
+	}
+
+	if s.stage == stageAlarm {
+		return errors.New("возврат из Stopping запрещён: сценарий в Alarm")
+	}
+
+	if s.stage == stageStarting && status.State == plc.StateClosed {
+		s.startedAt = time.Now()
+	}
+
 	return nil
+}
+
+func (s *SingleBarrier) StopInit(barrierID string) error {
+	if s.barrier.ID != barrierID {
+		return errors.New("шлагбаум не принадлежит линии")
+	}
+	return s.barrier.Stop()
 }
 
 func (s *SingleBarrier) Confirm() error {
@@ -276,13 +308,13 @@ func (s *SingleBarrier) Snapshot() (lanestatus.Snapshot, error) {
 	}, nil
 }
 
-func (s *SingleBarrier) NextState() (bool, error) {
+func (s *SingleBarrier) NextState(_ bool, _ bool) (bool, error) {
 	return false, errors.New(
 		"next_state неприменим для сценария single_barrier",
 	)
 }
 
-func (s *SingleBarrier) PrevState() error {
+func (s *SingleBarrier) PrevState(_ bool, _ bool) error {
 	return errors.New(
 		"prev_state неприменим для сценария single_barrier",
 	)

@@ -1,6 +1,7 @@
 package lanes
 
 import (
+	"AutoGo/internal/access"
 	"AutoGo/internal/scenarios"
 	"crypto/rand"
 	"encoding/hex"
@@ -15,8 +16,11 @@ type VehicleContext struct {
 	Source    string
 	Direction string
 
-	Waiting  bool
-	Approved bool
+	Waiting        bool
+	Approved       bool
+	StartUncertain bool
+	PlateType      access.PlateType
+	ValidatedAt    time.Time
 
 	StartedAt time.Time
 
@@ -25,6 +29,14 @@ type VehicleContext struct {
 	PhotoCaptureInProgress bool
 
 	source scenarios.TriggerSource
+}
+
+func (v *VehicleContext) validationCurrent() bool {
+	return v.Approved &&
+		v.PlateType != "" &&
+		v.PlateType != access.PlateTypeInvalid &&
+		!v.ValidatedAt.IsZero() &&
+		time.Since(v.ValidatedAt) <= validationCacheTimeout
 }
 
 func (v *VehicleContext) identity() string {

@@ -17,10 +17,10 @@ type Scenario interface {
 
 	Begin(direction string) error
 
-	Advance() (done bool, err error)
+	Advance(validationValid bool, vip bool) (done bool, err error)
 
-	NextState() (done bool, err error)
-	PrevState() error
+	NextState(validationValid bool, vip bool) (done bool, err error)
+	PrevState(validationValid bool, vip bool) error
 
 	Confirm() error
 	Reject() error
@@ -34,6 +34,7 @@ type Scenario interface {
 	Cancel() error
 	RecoverNotReady() error
 	Resume() error
+	StopInit(barrierID string) error
 
 	Snapshot() (lanestatus.Snapshot, error)
 }

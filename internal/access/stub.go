@@ -22,13 +22,15 @@ func (d *StubDecider) Decide(
 
 	if strings.EqualFold(strings.TrimSpace(value), "DENY") {
 		return Decision{
-			Allowed: false,
-			Reason:  "отказано заглушкой",
+			Allowed:   false,
+			PlateType: PlateTypeInvalid,
+			Reason:    "отказано заглушкой",
 		}, nil
 	}
 
 	return Decision{
-		Allowed: true,
-		Reason:  "разрешено заглушкой",
+		Allowed:   true,
+		PlateType: PlateTypeRegular,
+		Reason:    "разрешено заглушкой",
 	}, nil
 }

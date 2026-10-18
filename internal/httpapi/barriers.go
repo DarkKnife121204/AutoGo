@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -136,25 +137,22 @@ func (a *API) barrierCommand(
 		}
 	}
 
-	var err error
-
 	switch command {
-	case "start":
-		err = barrier.Start()
-	case "startreverse":
-		err = barrier.StartReverse()
-	case "stop":
-		err = barrier.Stop()
-	case "reset", "resetalarm":
-		err = barrier.Reset()
-	case "open":
-		err = barrier.Open()
-	case "close":
-		err = barrier.Close()
+	case "start", "startreverse", "stop", "reset", "resetalarm", "open", "close":
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"success": false,
 			"message": "Неизвестная команда",
+			"data":    nil,
+		})
+		return
+	}
+
+	err := lane.ManualBarrierCommand(barrier, command)
+	if errors.Is(err, lanes.ErrManualCommandForbidden) {
+		writeJSON(w, http.StatusLocked, map[string]any{
+			"success": false,
+			"message": "Прямое управление запрещено: линия в automatic",
 			"data":    nil,
 		})
 		return

@@ -12,6 +12,8 @@ import (
 	"AutoGo/internal/axxon"
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanestatus"
+	"AutoGo/internal/plc"
+	"AutoGo/internal/plcclient"
 	"AutoGo/internal/scenarios"
 )
 
@@ -19,6 +21,8 @@ const (
 	pollInterval               = 200 * time.Millisecond
 	photoCacheTimeout          = 600 * time.Second
 	identificationCacheTimeout = 600 * time.Second
+	validationCacheTimeout     = 660 * time.Second
+	validationRequestTimeout   = 10 * time.Second
 
 	releaseModeExternalConfirmation = "external_confirmation"
 )
@@ -44,10 +48,15 @@ type Lane struct {
 	queueDepth        int
 	BidirectionalMode bool
 
-	cachedPlate   string
-	cachedPlateAt time.Time
-	cachedKey     string
-	cachedKeyAt   time.Time
+	cachedPlate          string
+	cachedPlateAt        time.Time
+	cachedPlateSource    scenarios.TriggerSource
+	cachedPlateDirection string
+	cachedKey            string
+	cachedKeyAt          time.Time
+	cachedKeySource      scenarios.TriggerSource
+	cachedKeyDirection   string
+	previousPLCStates    map[string]string
 
 	photoVehicleID         string
 	photo                  []byte
@@ -93,6 +102,7 @@ func New(
 		mode:              defaultMode,
 		queueDepth:        queueDepth,
 		BidirectionalMode: bidirectionalMode,
+		previousPLCStates: make(map[string]string),
 	}, nil
 }
 
@@ -107,19 +117,54 @@ func (l *Lane) Mode() Mode {
 	return l.mode
 }
 
+var ErrManualCommandForbidden = errors.New("прямое управление запрещено: линия в automatic")
+
+func (l *Lane) ManualBarrierCommand(barrier *devices.Barrier, command string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.mode != ModeManual {
+		return ErrManualCommandForbidden
+	}
+
+	switch command {
+	case "start":
+		return barrier.Start()
+	case "startreverse":
+		return barrier.StartReverse()
+	case "stop":
+		return barrier.Stop()
+	case "reset", "resetalarm":
+		return barrier.Reset()
+	case "open":
+		return barrier.Open()
+	case "close":
+		return barrier.Close()
+	default:
+		return errors.New("неизвестная команда шлагбаума")
+	}
+}
+
 func (l *Lane) Start() error {
 	l.mu.Lock()
+	err := l.startLocked()
+	l.mu.Unlock()
+	if err != nil {
+		return err
+	}
 
-	current := l.activeVehicle
+	log.Printf("[lane %s] mode -> automatic", l.ID)
+	l.logStateChange()
+	return nil
+}
 
-	if current != nil {
+func (l *Lane) startLocked() error {
+	if l.activeVehicle != nil {
 		switch l.stoppedFrom {
 		case lanestatus.StateWaitingTransfer1,
 			lanestatus.StateWaitingTransfer2,
 			lanestatus.StateRollingBack:
-
 			if err := l.Scenario.Resume(); err != nil {
-				l.mu.Unlock()
 				return err
 			}
 		}
@@ -127,11 +172,6 @@ func (l *Lane) Start() error {
 
 	l.mode = ModeAutomatic
 	l.stoppedFrom = ""
-	l.mu.Unlock()
-
-	log.Printf("[lane %s] mode -> automatic", l.ID)
-	l.logStateChange()
-
 	return nil
 }
 
@@ -143,8 +183,20 @@ func (l *Lane) Stop() error {
 		return nil
 	}
 
-	l.stoppedFrom = l.lastState
+	snapshot, err := l.Scenario.Snapshot()
+	if err != nil {
+		log.Printf(
+			"[lane %s] Stop: PLC status unavailable: %v",
+			l.ID,
+			err,
+		)
+		l.stoppedFrom = l.lastState
+	} else {
+		l.stoppedFrom = deriveState(snapshot, l.mode, l.activeVehicle)
+	}
+
 	l.mode = ModeManual
+	l.previousPLCStates = make(map[string]string)
 
 	l.mu.Unlock()
 
@@ -156,85 +208,108 @@ func (l *Lane) Stop() error {
 }
 
 func (l *Lane) Reset() error {
-	status, err := l.Status()
+	l.mu.Lock()
+
+	snapshot, err := l.Scenario.Snapshot()
 	if err != nil {
+		l.mu.Unlock()
 		return err
 	}
+	state := deriveState(snapshot, l.mode, l.activeVehicle)
 
-	if status.State == lanestatus.StateIdentEntrance {
+	if state == lanestatus.StateStopping {
+		err = l.startLocked()
+		l.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		l.logStateChange()
 		return nil
 	}
 
-	if status.State == lanestatus.StateStopping {
-		return l.Start()
+	if state == lanestatus.StateIdentEntrance {
+		l.activeVehicle = nil
+		l.mu.Unlock()
+		l.logStateChange()
+		return nil
 	}
 
-	l.mu.Lock()
-
-	switch status.State {
+	switch state {
 	case lanestatus.StateNotReady:
 		err = l.Scenario.RecoverNotReady()
-
 	case lanestatus.StateWaitingTransfer1,
 		lanestatus.StateWaitingTransfer2,
 		lanestatus.StateConfirm,
 		lanestatus.StateRollingBack,
 		lanestatus.StateWaitingTransfer:
-
 		err = l.Scenario.Cancel()
-
 	default:
 		err = l.Scenario.Reset()
 	}
 
+	for id, device := range snapshot.Devices {
+		if device.Type == "barrier" {
+			l.previousPLCStates[id] = plc.StateInit.String()
+		}
+	}
+
 	if err != nil {
+		if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) && l.activeVehicle != nil {
+			l.activeVehicle.StartUncertain = true
+		}
 		l.mu.Unlock()
 		return err
 	}
 
 	l.activeVehicle = nil
 	l.mu.Unlock()
-
 	l.logStateChange()
-
 	return nil
 }
 
 func (l *Lane) Confirm() error {
 	l.mu.Lock()
-
 	if l.mode != ModeAutomatic {
 		l.mu.Unlock()
-
-		return errors.New(
-			"подтверждение недоступно: линия не в автоматическом режиме",
-		)
+		return errors.New("подтверждение недоступно: линия не в автоматическом режиме")
 	}
 
-	l.mu.Unlock()
+	vehicle := l.activeVehicle
+	if vehicle == nil || vehicle.StartUncertain {
+		l.mu.Unlock()
+		return errors.New("подтверждение недоступно: нет активной машины или результат PLC-команды неизвестен")
+	}
 
 	err := l.Scenario.Confirm()
-	l.logStateChange()
+	if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+		vehicle.StartUncertain = true
+	}
+	l.mu.Unlock()
 
+	l.logStateChange()
 	return err
 }
 
 func (l *Lane) Reject() error {
 	l.mu.Lock()
-
 	if l.mode != ModeAutomatic {
 		l.mu.Unlock()
-
-		return errors.New(
-			"отклонение недоступно: линия не в автоматическом режиме",
-		)
+		return errors.New("отклонение недоступно: линия не в автоматическом режиме")
 	}
 
-	l.mu.Unlock()
+	vehicle := l.activeVehicle
+	if vehicle == nil || vehicle.StartUncertain {
+		l.mu.Unlock()
+		return errors.New("отклонение недоступно: нет активной машины или результат PLC-команды неизвестен")
+	}
 
 	err := l.Scenario.Reject()
-	l.logStateChange()
+	if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+		vehicle.StartUncertain = true
+	}
+	l.mu.Unlock()
 
+	l.logStateChange()
 	return err
 }
 
@@ -250,6 +325,18 @@ func (l *Lane) trigger(
 		)
 	}
 
+	if direction == "" {
+		direction = "normal"
+	}
+
+	if direction != "normal" && direction != "reverse" {
+		return errors.New("неизвестное направление движения")
+	}
+
+	if direction == "reverse" && !l.BidirectionalMode {
+		return errors.New("обратное направление запрещено для этой линии")
+	}
+
 	l.mu.Lock()
 
 	if l.mode == ModeManual {
@@ -262,11 +349,9 @@ func (l *Lane) trigger(
 		}
 
 		if l.queueDepth <= 0 {
+			l.cacheIdentificationLocked(source, plate, keyCode, direction)
 			l.mu.Unlock()
-
-			return errors.New(
-				"очередь отключена для линии",
-			)
+			return nil
 		}
 
 		if len(l.pending)+len(l.queue) >= l.queueDepth {
@@ -276,6 +361,8 @@ func (l *Lane) trigger(
 				"очередь заполнена",
 			)
 		}
+
+		l.cacheIdentificationLocked(source, plate, keyCode, direction)
 
 		vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
 
@@ -310,10 +397,6 @@ func (l *Lane) trigger(
 		return nil
 	}
 
-	if l.activeVehicle != nil {
-		l.cacheIdentificationLocked(plate, keyCode)
-	}
-
 	if l.activeVehicle == nil &&
 		len(l.queue) == 0 &&
 		len(l.pending) == 0 {
@@ -336,7 +419,6 @@ func (l *Lane) trigger(
 		}
 
 		vehicle.Waiting = true
-		vehicle.Approved = true
 		l.activeVehicle = vehicle
 		l.mu.Unlock()
 
@@ -354,11 +436,9 @@ func (l *Lane) trigger(
 	}
 
 	if l.queueDepth <= 0 {
+		l.cacheIdentificationLocked(source, plate, keyCode, direction)
 		l.mu.Unlock()
-
-		return errors.New(
-			"линия занята: проезд уже выполняется",
-		)
+		return nil
 	}
 
 	if len(l.pending)+len(l.queue) >= l.queueDepth {
@@ -368,6 +448,8 @@ func (l *Lane) trigger(
 			"очередь заполнена",
 		)
 	}
+
+	l.cacheIdentificationLocked(source, plate, keyCode, direction)
 
 	vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
 
@@ -416,6 +498,7 @@ func (l *Lane) newVehicleLocked(
 		KeyCode:   keyCode,
 		Source:    string(source),
 		Direction: direction,
+		Approved:  l.releaseMode != releaseModeExternalConfirmation,
 		StartedAt: time.Now(),
 		source:    source,
 	}
@@ -452,8 +535,11 @@ func (l *Lane) isDuplicateLocked(
 }
 
 func (l *Lane) decidePending(vehicle *VehicleContext) {
+	ctx, cancel := context.WithTimeout(context.Background(), validationRequestTimeout)
+	defer cancel()
+
 	decision, err := l.decider.Decide(
-		context.Background(),
+		ctx,
 		access.Request{
 			LaneID:    l.ID,
 			Plate:     vehicle.Plate,
@@ -463,7 +549,15 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 		},
 	)
 
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+
 	if err != nil {
+		l.mu.Lock()
+		l.removePendingLocked(vehicle)
+		l.promoteApprovedPendingLocked()
+		l.mu.Unlock()
 		log.Printf(
 			"[lane %s] queue decision ERROR: value=%s error=%v",
 			l.ID,
@@ -474,7 +568,9 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 		return
 	}
 
-	allowed := decision.Allowed
+	allowed := decision.Allowed &&
+		decision.PlateType != "" &&
+		decision.PlateType != access.PlateTypeInvalid
 
 	l.mu.Lock()
 
@@ -493,6 +589,8 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 	}
 
 	vehicle.Approved = true
+	vehicle.PlateType = decision.PlateType
+	vehicle.ValidatedAt = time.Now()
 
 	l.promoteApprovedPendingLocked()
 
@@ -542,37 +640,31 @@ func (l *Lane) takeQueueHeadLocked() *VehicleContext {
 	}
 
 	head := l.queue[0]
+	if !head.Approved {
+		return nil
+	}
 	l.queue = l.queue[1:]
 
 	l.clearIdentificationCacheLocked()
+	head.Waiting = true
 	l.activeVehicle = head
 
 	return head
 }
 
-func (l *Lane) beginVehicle(
-	vehicle *VehicleContext,
-) error {
-	log.Printf(
-		"[lane %s] begin: value=%s direction=%s",
-		l.ID,
-		vehicle.identity(),
-		vehicle.Direction,
-	)
+func (l *Lane) beginVehicleLocked(vehicle *VehicleContext) error {
+	log.Printf("[lane %s] begin: value=%s direction=%s", l.ID, vehicle.identity(), vehicle.Direction)
 
 	if err := l.Scenario.Begin(vehicle.Direction); err != nil {
-		log.Printf(
-			"[lane %s] begin FAILED: value=%s error=%v",
-			l.ID,
-			vehicle.identity(),
-			err,
-		)
-
+		if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+			vehicle.StartUncertain = true
+			log.Printf("[lane %s] START outcome unknown, повтор запрещён до Reset: value=%s", l.ID, vehicle.identity())
+		}
+		log.Printf("[lane %s] begin FAILED: value=%s error=%v", l.ID, vehicle.identity(), err)
 		return err
 	}
 
-	l.mu.Lock()
-
+	vehicle.Waiting = false
 	l.photoVehicleID = vehicle.ID
 	l.photoCaptureInProgress = vehicle.PhotoCaptureInProgress
 
@@ -582,17 +674,15 @@ func (l *Lane) beginVehicle(
 		l.photo = vehicle.Photo
 		l.photoCapturedAt = vehicle.PhotoCapturedAt
 	}
-
-	l.mu.Unlock()
-
-	l.logStateChange()
-
 	return nil
 }
 
 func (l *Lane) decideAsync(vehicle *VehicleContext) {
+	ctx, cancel := context.WithTimeout(context.Background(), validationRequestTimeout)
+	defer cancel()
+
 	decision, err := l.decider.Decide(
-		context.Background(),
+		ctx,
 		access.Request{
 			LaneID:    l.ID,
 			Plate:     vehicle.Plate,
@@ -602,7 +692,19 @@ func (l *Lane) decideAsync(vehicle *VehicleContext) {
 		},
 	)
 
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+
 	if err != nil {
+		l.mu.Lock()
+
+		if l.activeVehicle == vehicle && vehicle.Waiting {
+			l.activeVehicle = nil
+		}
+
+		l.mu.Unlock()
+
 		log.Printf(
 			"[lane %s] decision ERROR: value=%s error=%v",
 			l.ID,
@@ -610,30 +712,27 @@ func (l *Lane) decideAsync(vehicle *VehicleContext) {
 			err,
 		)
 
+		l.logStateChange()
 		return
 	}
 
-	l.applyDecision(vehicle, decision.Allowed)
+	l.applyDecision(vehicle, decision)
 }
 
-func (l *Lane) applyDecision(
-	vehicle *VehicleContext,
-	allowed bool,
-) {
-	log.Printf(
-		"[lane %s] decision: value=%s allowed=%v",
-		l.ID, vehicle.identity(), allowed,
-	)
+func (l *Lane) applyDecision(vehicle *VehicleContext, decision access.Decision) {
+	allowed := decision.Allowed &&
+		decision.PlateType != "" &&
+		decision.PlateType != access.PlateTypeInvalid
+
+	log.Printf("[lane %s] decision: value=%s allowed=%v",
+		l.ID, vehicle.identity(), allowed)
 
 	l.mu.Lock()
 
 	if l.activeVehicle != vehicle || !vehicle.Waiting {
-		log.Printf(
-			"[lane %s] decision IGNORED (stale): value=%s",
-			l.ID, vehicle.identity(),
-		)
 		l.mu.Unlock()
-
+		log.Printf("[lane %s] decision IGNORED (stale): value=%s",
+			l.ID, vehicle.identity())
 		return
 	}
 
@@ -644,43 +743,26 @@ func (l *Lane) applyDecision(
 	}
 
 	vehicle.Approved = true
+	vehicle.PlateType = decision.PlateType
+	vehicle.ValidatedAt = time.Now()
 
-	vehicle.Approved = true
 	l.mu.Unlock()
 
-	log.Printf(
-		"[lane %s] decision ALLOW stored, waiting for PLC ready: value=%s",
-		l.ID, vehicle.identity(),
-	)
-
-	l.beginVehicle(vehicle)
+	log.Printf("[lane %s] decision ALLOW stored, waiting for PLC ready: value=%s",
+		l.ID, vehicle.identity())
 }
 
-func (l *Lane) clearVehicle(vehicle *VehicleContext) {
-	l.mu.Lock()
-
+func (l *Lane) clearVehicleLocked(vehicle *VehicleContext) {
 	if l.activeVehicle == vehicle {
 		l.activeVehicle = nil
-	}
-
-	next := l.takeQueueHeadLocked()
-	l.mu.Unlock()
-
-	log.Printf(
-		"[lane %s] passage finished: value=%s",
-		l.ID, vehicle.identity(),
-	)
-
-	if next != nil {
-		log.Printf(
-			"[lane %s] activating from queue: value=%s",
-			l.ID, next.identity(),
-		)
-		l.beginVehicle(next)
+		log.Printf("[lane %s] passage finished: value=%s", l.ID, vehicle.identity())
 	}
 }
 
 func (l *Lane) Status() (lanestatus.LaneStatus, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	snapshot, err := l.Scenario.Snapshot()
 	if err != nil {
 		log.Printf("[lane %s] snapshot error: %v", l.ID, err)
@@ -710,7 +792,6 @@ func (l *Lane) Status() (lanestatus.LaneStatus, error) {
 		Devices:     deviceMap,
 	}
 
-	l.mu.Lock()
 	mode := l.mode
 	vehicle := l.activeVehicle
 
@@ -742,7 +823,6 @@ func (l *Lane) Status() (lanestatus.LaneStatus, error) {
 	}
 
 	result.State = deriveState(snapshot, mode, vehicle)
-	l.mu.Unlock()
 
 	return result, nil
 }
@@ -756,6 +836,15 @@ func deriveState(
 		return lanestatus.StateStopping
 	}
 
+	if (vehicle != nil && vehicle.StartUncertain) ||
+		snapshot.Alarm || snapshot.Phase == lanestatus.PhaseError {
+		return lanestatus.StateAlarm
+	}
+
+	if snapshot.Phase == lanestatus.PhaseNotReady {
+		return lanestatus.StateNotReady
+	}
+
 	if snapshot.Stage == "idle" &&
 		(vehicle == nil || vehicle.Waiting) {
 
@@ -764,10 +853,6 @@ func deriveState(
 		}
 
 		return lanestatus.StateNotReady
-	}
-
-	if snapshot.Alarm || snapshot.Phase == lanestatus.PhaseError {
-		return lanestatus.StateAlarm
 	}
 
 	switch snapshot.Stage {
@@ -779,10 +864,6 @@ func deriveState(
 		return lanestatus.StateWaitingTransfer2
 	case "reject":
 		return lanestatus.StateRollingBack
-	}
-
-	if snapshot.Phase == lanestatus.PhaseNotReady {
-		return lanestatus.StateNotReady
 	}
 
 	if vehicle != nil && !vehicle.Waiting {
@@ -829,88 +910,129 @@ func (l *Lane) StopPoller() {
 
 func (l *Lane) poll() {
 	l.mu.Lock()
-
 	if l.mode != ModeAutomatic {
 		l.mu.Unlock()
 		return
 	}
 
-	vehicle := l.activeVehicle
-	physical := vehicle != nil && !vehicle.Waiting
+	if l.activeVehicle == nil {
+		snapshot, err := l.Scenario.Snapshot()
+		if err == nil {
+			for id, device := range snapshot.Devices {
+				if device.Type != "barrier" {
+					continue
+				}
+				previous, exists := l.previousPLCStates[id]
 
-	l.mu.Unlock()
-
-	if !physical {
-		if vehicle != nil && vehicle.Waiting && vehicle.Approved {
-			snapshot, err := l.Scenario.Snapshot()
-
-			if err != nil {
-				log.Printf("[lane %s] PLC status error: %v", l.ID, err)
-			} else if snapshot.Ready &&
-				!snapshot.Alarm &&
-				(snapshot.Stage == "" || snapshot.Stage == "idle") {
-
-				l.mu.Lock()
-
-				start := l.mode == ModeAutomatic &&
-					l.activeVehicle == vehicle &&
-					vehicle.Waiting &&
-					vehicle.Approved
-
-				if start {
-					vehicle.Waiting = false
+				if exists &&
+					device.State == plc.StateInit.String() &&
+					previous != plc.StateInit.String() {
+					if err := l.Scenario.StopInit(id); err != nil {
+						log.Printf("[lane %s] stop after PLC Init failed: %v", l.ID, err)
+					}
 				}
 
-				l.mu.Unlock()
+				l.previousPLCStates[id] = device.State
+			}
 
-				if start {
-					if err := l.beginVehicle(vehicle); err != nil {
-						log.Printf(
-							"[lane %s] approved vehicle start failed: %v",
-							l.ID, err,
-						)
+			if snapshot.Ready && !snapshot.Alarm &&
+				(snapshot.Stage == "" || snapshot.Stage == "idle") {
+				l.takeQueueHeadLocked()
+				if l.queueDepth <= 0 &&
+					l.activeVehicle == nil &&
+					len(l.pending) == 0 &&
+					len(l.queue) == 0 {
+					if cached := l.takeCachedVehicleLocked(); cached != nil {
+						l.activeVehicle = cached
+						l.photoVehicleID = cached.ID
+						l.photoCaptureInProgress = false
+						l.mu.Unlock()
+						l.startPhotoCapture(cached)
+						if l.releaseMode == releaseModeExternalConfirmation {
+							go l.decideAsync(cached)
+						}
+						l.logStateChange()
+						return
 					}
 				}
 			}
-		} else if vehicle == nil {
-			l.mu.Lock()
-			next := l.takeQueueHeadLocked()
-			l.mu.Unlock()
-
-			if next != nil {
-				if err := l.beginVehicle(next); err != nil {
-					log.Printf(
-						"[lane %s] queue activation failed: %v",
-						l.ID, err,
-					)
-				}
-			}
 		}
+	}
+	vehicle := l.activeVehicle
 
+	if vehicle == nil {
+		l.mu.Unlock()
 		l.logStateChange()
 		return
 	}
 
-	done, err := l.Scenario.Advance()
+	if vehicle.Waiting {
+		if l.releaseMode == releaseModeExternalConfirmation &&
+			vehicle.Approved && !vehicle.validationCurrent() {
+
+			log.Printf(
+				"[lane %s] validation expired before Start: value=%s",
+				l.ID,
+				vehicle.identity(),
+			)
+
+			l.clearVehicleLocked(vehicle)
+			l.mu.Unlock()
+			l.logStateChange()
+			return
+		}
+
+		if vehicle.Approved && !vehicle.StartUncertain {
+			snapshot, err := l.Scenario.Snapshot()
+			if err != nil {
+				log.Printf("[lane %s] PLC status error: %v", l.ID, err)
+			} else if snapshot.Ready && !snapshot.Alarm &&
+				(snapshot.Stage == "" || snapshot.Stage == "idle") {
+				if err := l.beginVehicleLocked(vehicle); err != nil {
+					log.Printf("[lane %s] vehicle start failed: %v", l.ID, err)
+				}
+			}
+		}
+		l.mu.Unlock()
+		l.logStateChange()
+		return
+	}
+
+	validationValid := l.releaseMode != releaseModeExternalConfirmation ||
+		vehicle.validationCurrent()
+
+	done, err := l.Scenario.Advance(
+		validationValid,
+		vehicle.PlateType == access.PlateTypeVIP,
+	)
+
 	if err != nil {
+		if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+			vehicle.StartUncertain = true
+		}
+		l.mu.Unlock()
 		log.Printf("[lane %s] poll advance error: %v", l.ID, err)
+		l.logStateChange()
 		return
 	}
 
 	if done {
-		l.clearVehicle(vehicle)
+		l.clearVehicleLocked(vehicle)
 	}
 
+	l.mu.Unlock()
 	l.logStateChange()
 }
 
 func (l *Lane) logStateChange() {
+	l.mu.Lock()
+
 	snapshot, err := l.Scenario.Snapshot()
 	if err != nil {
+		l.mu.Unlock()
 		return
 	}
 
-	l.mu.Lock()
 	state := deriveState(snapshot, l.mode, l.activeVehicle)
 
 	if state != l.lastState {
@@ -922,9 +1044,9 @@ func (l *Lane) logStateChange() {
 			"[lane %s] state %s -> %s",
 			l.ID, stateOrInitial(prev), state,
 		)
-
 		return
 	}
+
 	l.mu.Unlock()
 }
 
@@ -964,68 +1086,84 @@ func (l *Lane) TriggerKeyCode(
 
 func (l *Lane) NextState() error {
 	l.mu.Lock()
-
 	if l.mode != ModeAutomatic {
 		l.mu.Unlock()
-
-		return errors.New(
-			"next_state недоступен: линия не в автоматическом режиме",
-		)
+		return errors.New("next_state недоступен: линия не в автоматическом режиме")
 	}
 
 	vehicle := l.activeVehicle
 
 	if vehicle == nil {
 		l.mu.Unlock()
+		return errors.New("next_state недоступен: нет активной машины")
+	}
 
-		return errors.New(
-			"next_state недоступен: нет активной машины",
-		)
+	if vehicle.StartUncertain {
+		l.mu.Unlock()
+		return errors.New("next_state запрещён: результат PLC-команды неизвестен; проверьте PLC и выполните Reset")
+	}
+
+	validationValid := l.releaseMode != releaseModeExternalConfirmation ||
+		vehicle.validationCurrent()
+
+	done, err := l.Scenario.NextState(
+		validationValid,
+		vehicle.PlateType == access.PlateTypeVIP,
+	)
+
+	if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+		vehicle.StartUncertain = true
+	}
+
+	if err == nil && done {
+		l.clearVehicleLocked(vehicle)
 	}
 
 	l.mu.Unlock()
 
-	done, err := l.Scenario.NextState()
 	if err != nil {
 		return err
 	}
 
-	if done {
-		l.clearVehicle(vehicle)
-	}
-
 	l.logStateChange()
-
 	return nil
 }
 
 func (l *Lane) PrevState() error {
 	l.mu.Lock()
-
 	if l.mode != ModeAutomatic {
 		l.mu.Unlock()
-
-		return errors.New(
-			"prev_state недоступен: линия не в автоматическом режиме",
-		)
+		return errors.New("prev_state недоступен: линия не в автоматическом режиме")
 	}
 
-	if l.activeVehicle == nil {
+	vehicle := l.activeVehicle
+	if vehicle == nil {
 		l.mu.Unlock()
+		return errors.New("prev_state недоступен: нет активной машины")
+	}
 
-		return errors.New(
-			"prev_state недоступен: нет активной машины",
-		)
+	if vehicle.StartUncertain {
+		l.mu.Unlock()
+		return errors.New("prev_state запрещён: результат Start неизвестен; сначала проверить PLC и выполнить Reset")
+	}
+
+	validationValid := l.releaseMode != releaseModeExternalConfirmation ||
+		vehicle.validationCurrent()
+
+	err := l.Scenario.PrevState(
+		validationValid,
+		vehicle.PlateType == access.PlateTypeVIP,
+	)
+
+	if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+		vehicle.StartUncertain = true
 	}
 
 	l.mu.Unlock()
-
-	if err := l.Scenario.PrevState(); err != nil {
+	if err != nil {
 		return err
 	}
-
 	l.logStateChange()
-
 	return nil
 }
 
@@ -1151,27 +1289,58 @@ func (l *Lane) Photo() (
 }
 
 func (l *Lane) cacheIdentificationLocked(
+	source scenarios.TriggerSource,
 	plate string,
 	keyCode string,
+	direction string,
 ) {
 	now := time.Now()
 
 	if plate != "" {
 		l.cachedPlate = plate
 		l.cachedPlateAt = now
+		l.cachedPlateSource = source
+		l.cachedPlateDirection = direction
 	}
 
 	if keyCode != "" {
 		l.cachedKey = keyCode
 		l.cachedKeyAt = now
+		l.cachedKeySource = source
+		l.cachedKeyDirection = direction
 	}
+}
+
+func (l *Lane) takeCachedVehicleLocked() *VehicleContext {
+	now := time.Now()
+
+	if l.cachedPlate != "" && now.Sub(l.cachedPlateAt) < identificationCacheTimeout {
+		vehicle := l.newVehicleLocked(l.cachedPlateSource, l.cachedPlate, "", l.cachedPlateDirection)
+		vehicle.Waiting = true
+		l.clearIdentificationCacheLocked()
+		return vehicle
+	}
+
+	if l.cachedKey != "" && now.Sub(l.cachedKeyAt) < identificationCacheTimeout {
+		vehicle := l.newVehicleLocked(l.cachedKeySource, "", l.cachedKey, l.cachedKeyDirection)
+		vehicle.Waiting = true
+		l.clearIdentificationCacheLocked()
+		return vehicle
+	}
+
+	l.clearIdentificationCacheLocked()
+	return nil
 }
 
 func (l *Lane) clearIdentificationCacheLocked() {
 	l.cachedPlate = ""
 	l.cachedPlateAt = time.Time{}
+	l.cachedPlateSource = ""
+	l.cachedPlateDirection = ""
 	l.cachedKey = ""
 	l.cachedKeyAt = time.Time{}
+	l.cachedKeySource = ""
+	l.cachedKeyDirection = ""
 }
 
 func (l *Lane) CachedIdentification() (
