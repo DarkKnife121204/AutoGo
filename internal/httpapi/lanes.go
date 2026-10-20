@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 
 	"AutoGo/internal/lanes"
 	"AutoGo/internal/lanestatus"
@@ -36,8 +37,14 @@ func (a *API) makeLaneContext(
 
 	photo, photoCapturedAt, photoCaptureInProgress := lane.Photo()
 
-	cachedPlate, plateCachedAt, cachedKey, keyCachedAt :=
+	cachedPlate, plateCachedAt, cachedKey, keyCachedAt, cachedDirection :=
 		lane.CachedIdentification()
+
+	plateNumber, direction, plateType, validationTime, validationInProgress :=
+		lane.ContextVehicle()
+
+	validation, validatedPlate, validatedAt, hasCachedValidation :=
+		lane.CachedValidation()
 
 	response := laneContextResponse{
 		CurrentState:        string(status.State),
@@ -54,6 +61,7 @@ func (a *API) makeLaneContext(
 
 		OperationsStatus: operationsStatusResponse{
 			IsPhotoCaptureInProgress: photoCaptureInProgress,
+			IsValidationInProgress:   validationInProgress,
 		},
 
 		VehicleContext: vehicleContextResponse{
@@ -68,23 +76,54 @@ func (a *API) makeLaneContext(
 		},
 	}
 
-	if status.Vehicle != nil {
-		direction := "Unknown"
+	if direction != "" {
+		apiDirection := "Unknown"
 
-		switch status.Vehicle.Direction {
+		switch direction {
 		case "normal":
-			direction = "Forward"
+			apiDirection = "Forward"
 		case "reverse":
-			direction = "Backward"
+			apiDirection = "Backward"
 		}
 
-		response.CurrentDirection = direction
-		response.VehicleContext.CurrentVehicle.Direction = direction
+		response.CurrentDirection = apiDirection
+		response.VehicleContext.CurrentVehicle.Direction = apiDirection
+	}
 
-		if status.Vehicle.Plate != "" {
-			plate := status.Vehicle.Plate
-			response.VehicleContext.CurrentVehicle.PlateNumber = &plate
+	if plateNumber != "" {
+		plate := plateNumber
+		response.VehicleContext.CurrentVehicle.PlateNumber = &plate
+	}
+
+	if !validationTime.IsZero() {
+		response.VehicleContext.CurrentVehicle.ValidationTime = &validationTime
+	}
+
+	if plateType == "Regular" || plateType == "VIP" {
+		response.VehicleContext.CurrentVehicle.PlateType = string(plateType)
+	}
+
+	if hasCachedValidation {
+		valid := validation.Allowed &&
+			validation.PlateType != "" &&
+			validation.PlateType != "Invalid"
+
+		plateType := string(validation.PlateType)
+		if plateType == "" {
+			plateType = "Invalid"
 		}
+
+		info := validationInfoResponse{
+			IsValid:        &valid,
+			PlateType:      plateType,
+			ValidationTime: &validatedAt,
+		}
+
+		if validatedPlate != "" {
+			info.PlateNumber = &validatedPlate
+		}
+
+		response.VehicleContext.CachedData.CachedValidation = &info
 	}
 
 	if len(photo) > 0 {
@@ -103,6 +142,10 @@ func (a *API) makeLaneContext(
 	if cachedPlate != "" || cachedKey != "" {
 		identification := cachedIdentificationResponse{
 			Direction: "In",
+		}
+
+		if cachedDirection == "reverse" {
+			identification.Direction = "Out"
 		}
 
 		if cachedPlate != "" {
@@ -164,7 +207,7 @@ func (a *API) lanePhotoLast(
 }
 
 type laneCommandRequest struct {
-	CommandType string `json:"commandType"`
+	CommandType json.RawMessage `json:"commandType"`
 }
 
 func (a *API) laneCommand(
@@ -175,7 +218,6 @@ func (a *API) laneCommand(
 	var request laneCommandRequest
 
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(&request); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -185,13 +227,44 @@ func (a *API) laneCommand(
 		return
 	}
 
-	switch request.CommandType {
-	case "NextState", "PrevState", "Reset", "ResetAlarm",
-		"Stop", "Start", "Back":
+	var commandType string
+
+	if err := json.Unmarshal(request.CommandType, &commandType); err != nil {
+		var numeric int
+
+		if json.Unmarshal(request.CommandType, &numeric) == nil {
+			commands := []string{
+				"None", "ForceIdent", "NextState", "Reset", "ResetAlarm",
+				"Stop", "Start", "PrevState", "Back",
+			}
+
+			if numeric >= 0 && numeric < len(commands) {
+				commandType = commands[numeric]
+			}
+		}
+	}
+
+	switch strings.ToLower(commandType) {
+	case "forceident":
+		commandType = "ForceIdent"
+	case "nextstate":
+		commandType = "NextState"
+	case "prevstate":
+		commandType = "PrevState"
+	case "reset":
+		commandType = "Reset"
+	case "resetalarm":
+		commandType = "ResetAlarm"
+	case "stop":
+		commandType = "Stop"
+	case "start":
+		commandType = "Start"
+	case "back":
+		commandType = "Back"
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"errorType": "InvalidCommand",
-			"message":   "Неизвестная команда",
+			"message":   "Invalid request - invalid command type",
 		})
 		return
 	}
@@ -206,7 +279,7 @@ func (a *API) laneCommand(
 		return
 	}
 
-	if !isCommandAllowed(status.State, request.CommandType) {
+	if !isCommandAllowed(status.State, commandType) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"errorType": "InvalidState",
 			"message":   "Invalid request - command cannot be executed in current state",
@@ -214,7 +287,7 @@ func (a *API) laneCommand(
 		return
 	}
 
-	switch request.CommandType {
+	switch commandType {
 	case "NextState":
 		err = lane.NextState()
 
@@ -236,7 +309,7 @@ func (a *API) laneCommand(
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"errorType": "InvalidCommand",
-			"message":   "Неизвестная или пока не реализованная команда: " + request.CommandType,
+			"message":   "Invalid request - invalid command type",
 		})
 		return
 	}
@@ -245,13 +318,13 @@ func (a *API) laneCommand(
 		log.Printf(
 			"[lane %s] command %s failed: %v",
 			lane.ID,
-			request.CommandType,
+			commandType,
 			err,
 		)
 
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"errorType": "InvalidState",
-			"message":   err.Error(),
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"errorType": "InternalError",
+			"message":   "Внутренняя ошибка сервера: " + err.Error(),
 		})
 		return
 	}
@@ -266,7 +339,7 @@ func (a *API) laneCommand(
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"message":        "Команда " + request.CommandType + " выполнена успешно",
+		"message":        "Команда " + commandType + " выполнена успешно",
 		"updatedContext": context,
 	})
 }

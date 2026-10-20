@@ -69,6 +69,36 @@ func (a *API) Routes() http.Handler {
 	)
 
 	mux.HandleFunc(
+		"GET /api/v1/UDTGate/{$}",
+		a.withGateName(a.barrierList),
+	)
+
+	mux.HandleFunc(
+		"GET /api/v1/UDTGate/count",
+		a.withGateName(a.barrierCount),
+	)
+
+	mux.HandleFunc(
+		"GET /api/v1/UDTGate/service/status",
+		a.withGateName(a.barrierServiceStatus),
+	)
+
+	mux.HandleFunc(
+		"POST /api/v1/UDTGate/service/{command}",
+		a.withGateName(a.barrierServiceCommand),
+	)
+
+	mux.HandleFunc(
+		"GET /api/v1/UDTGate/{barrier}",
+		a.withGateName(a.barrierInfo),
+	)
+
+	mux.HandleFunc(
+		"GET /api/v1/UDTGate/{barrier}/alarm",
+		a.withGateName(a.barrierAlarm),
+	)
+
+	mux.HandleFunc(
 		"POST /api/v1/UDTGate/{barrier}/{command}",
 		a.withGateName(a.barrierCommand),
 	)

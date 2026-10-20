@@ -1,6 +1,7 @@
 package scenarios
 
 import (
+	"AutoGo/internal/plcclient"
 	"errors"
 	"fmt"
 	"log"
@@ -336,7 +337,7 @@ func (d *DoubleBarrier) Close() error {
 	return d.entry.Close()
 }
 
-func (d *DoubleBarrier) Reset() error {
+func (d *DoubleBarrier) Reset() ([]string, error) {
 	entryResult := make(chan error, 1)
 	exitResult := make(chan error, 1)
 
@@ -351,8 +352,18 @@ func (d *DoubleBarrier) Reset() error {
 	entryErr := <-entryResult
 	exitErr := <-exitResult
 
+	resetIDs := make([]string, 0, 2)
+
+	if entryErr == nil || errors.Is(entryErr, plcclient.ErrWriteOutcomeUnknown) {
+		resetIDs = append(resetIDs, d.entry.ID)
+	}
+
+	if exitErr == nil || errors.Is(exitErr, plcclient.ErrWriteOutcomeUnknown) {
+		resetIDs = append(resetIDs, d.exit.ID)
+	}
+
 	if err := errors.Join(entryErr, exitErr); err != nil {
-		return err
+		return resetIDs, err
 	}
 
 	d.mu.Lock()
@@ -362,7 +373,7 @@ func (d *DoubleBarrier) Reset() error {
 	d.currentDirection = ""
 	d.mu.Unlock()
 
-	return nil
+	return resetIDs, nil
 }
 
 func (d *DoubleBarrier) Cancel() error {
@@ -394,23 +405,29 @@ func (d *DoubleBarrier) Cancel() error {
 	return nil
 }
 
-func (d *DoubleBarrier) RecoverNotReady() error {
+func (d *DoubleBarrier) RecoverNotReady() ([]string, error) {
+	resetIDs := make([]string, 0, 2)
+
 	for _, barrier := range []*devices.Barrier{d.entry, d.exit} {
 		status, err := barrier.Status()
 		if err != nil {
-			return err
+			return resetIDs, err
 		}
 
 		switch {
 		case status.State == plc.StateAlarm || status.HasAlarm():
 			err = barrier.Reset()
 
+			if err == nil || errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+				resetIDs = append(resetIDs, barrier.ID)
+			}
+
 		case status.State != plc.StateClosed && status.State != plc.StateInit:
 			err = barrier.Stop()
 		}
 
 		if err != nil {
-			return err
+			return resetIDs, err
 		}
 	}
 
@@ -421,7 +438,7 @@ func (d *DoubleBarrier) RecoverNotReady() error {
 	d.currentDirection = ""
 	d.mu.Unlock()
 
-	return nil
+	return resetIDs, nil
 }
 
 func (d *DoubleBarrier) Resume() error {

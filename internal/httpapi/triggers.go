@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"AutoGo/internal/scenarios"
 )
@@ -28,16 +29,13 @@ func (a *API) plateTrigger(
 	cam := strings.TrimSpace(r.URL.Query().Get("cam"))
 	plate := strings.TrimSpace(r.URL.Query().Get("plate"))
 
-	if cam == "" || plate == "" {
-		writeJSON(
-			w,
-			http.StatusBadRequest,
-			map[string]string{
-				"status": "error",
-				"error":  "нужны параметры cam и plate",
-			},
-		)
-
+	if cam == "" || plate == "" ||
+		len([]rune(cam)) > 50 ||
+		len([]rune(plate)) > 20 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false,
+			"message": "Ошибка данных",
+		})
 		return
 	}
 
@@ -50,10 +48,10 @@ func (a *API) plateTrigger(
 }
 
 type codeTriggerRequest struct {
-	Sender    string `json:"sender"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	Timestamp string `json:"timestamp"`
+	Sender    string     `json:"sender"`
+	Title     string     `json:"title"`
+	Content   string     `json:"content"`
+	Timestamp *time.Time `json:"timestamp"`
 }
 
 func (a *API) codeTrigger(

@@ -1,6 +1,7 @@
 package scenarios
 
 import (
+	"AutoGo/internal/plcclient"
 	"errors"
 	"log"
 	"sync"
@@ -180,9 +181,15 @@ func (s *SingleBarrier) Close() error {
 	return s.barrier.Close()
 }
 
-func (s *SingleBarrier) Reset() error {
-	if err := s.barrier.Reset(); err != nil {
-		return err
+func (s *SingleBarrier) Reset() ([]string, error) {
+	err := s.barrier.Reset()
+
+	if err != nil {
+		if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+			return []string{s.barrier.ID}, err
+		}
+
+		return nil, err
 	}
 
 	s.mu.Lock()
@@ -190,7 +197,7 @@ func (s *SingleBarrier) Reset() error {
 	s.startedAt = time.Time{}
 	s.mu.Unlock()
 
-	return nil
+	return []string{s.barrier.ID}, nil
 }
 
 func (s *SingleBarrier) Cancel() error {
@@ -207,22 +214,28 @@ func (s *SingleBarrier) Cancel() error {
 	return nil
 }
 
-func (s *SingleBarrier) RecoverNotReady() error {
+func (s *SingleBarrier) RecoverNotReady() ([]string, error) {
 	status, err := s.barrier.Status()
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	var resetIDs []string
 
 	switch {
 	case status.State == plc.StateAlarm || status.HasAlarm():
 		err = s.barrier.Reset()
+
+		if err == nil || errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
+			resetIDs = append(resetIDs, s.barrier.ID)
+		}
 
 	case status.State != plc.StateClosed && status.State != plc.StateInit:
 		err = s.barrier.Stop()
 	}
 
 	if err != nil {
-		return err
+		return resetIDs, err
 	}
 
 	s.mu.Lock()
@@ -230,7 +243,7 @@ func (s *SingleBarrier) RecoverNotReady() error {
 	s.startedAt = time.Time{}
 	s.mu.Unlock()
 
-	return nil
+	return resetIDs, nil
 }
 
 func (s *SingleBarrier) Resume() error {

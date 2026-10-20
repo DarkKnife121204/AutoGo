@@ -18,6 +18,7 @@ type Barrier struct {
 
 	mu        sync.Mutex
 	lastState string
+	locked    bool
 }
 
 func NewBarrier(
@@ -39,6 +40,19 @@ func NewBarrier(
 		ControllerID: controllerID,
 		PLC:          plc,
 	}, nil
+}
+
+func (b *Barrier) IsLocked() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.locked
+}
+
+func (b *Barrier) SetLocked(value bool) {
+	b.mu.Lock()
+	b.locked = value
+	b.mu.Unlock()
 }
 
 func (b *Barrier) Start() error {

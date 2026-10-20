@@ -30,9 +30,9 @@ type Scenario interface {
 	Stop() error
 	Open() error
 	Close() error
-	Reset() error
+	Reset() ([]string, error)
 	Cancel() error
-	RecoverNotReady() error
+	RecoverNotReady() ([]string, error)
 	Resume() error
 	StopInit(barrierID string) error
 
