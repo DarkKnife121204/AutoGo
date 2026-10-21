@@ -17,13 +17,19 @@ type SiteConfig struct {
 }
 
 type ServiceConfig struct {
-	ID       string        `yaml:"id"`
-	Type     string        `yaml:"type"`
-	Address  string        `yaml:"address"`
-	Server   string        `yaml:"server"`
-	Username string        `yaml:"username"`
-	Password string        `yaml:"password"`
-	Timeout  time.Duration `yaml:"timeout"`
+	ID              string        `yaml:"id"`
+	Type            string        `yaml:"type"`
+	Mode            string        `yaml:"mode"`
+	PhotoFile       string        `yaml:"photo_file"`
+	VideoFile       string        `yaml:"video_file"`
+	VideoAddress    string        `yaml:"video_address"`
+	VideoStartDelay time.Duration `yaml:"video_start_delay"`
+	VideoDuration   time.Duration `yaml:"video_duration"`
+	Address         string        `yaml:"address"`
+	Server          string        `yaml:"server"`
+	Username        string        `yaml:"username"`
+	Password        string        `yaml:"password"`
+	Timeout         time.Duration `yaml:"timeout"`
 }
 
 type ControllerConfig struct {
@@ -58,6 +64,8 @@ type LaneConfig struct {
 	Devices           []string       `yaml:"devices"`
 	Scenario          ScenarioConfig `yaml:"scenario"`
 	BidirectionalMode bool           `yaml:"bidirectional_mode"`
+	VideoService      string         `yaml:"video_service"`
+	VideoCameraID     string         `yaml:"video_camera_id"`
 }
 
 type ScenarioConfig struct {

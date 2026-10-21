@@ -54,6 +54,11 @@ func (a *API) Routes() http.Handler {
 	)
 
 	mux.HandleFunc(
+		"GET /api/v1/autogate/video/current",
+		a.withGateName(a.laneVideoCurrent),
+	)
+
+	mux.HandleFunc(
 		"GET /api/v1/autogate/photo/last",
 		a.withGateName(a.lanePhotoLast),
 	)

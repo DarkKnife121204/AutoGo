@@ -69,7 +69,7 @@ func (d *LaravelDecider) NotifyContext(ctx context.Context, update ContextUpdate
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := d.client.Do(req)
+	resp, err := d.notifyClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("отправка контекста Laravel: %w", err)
 	}

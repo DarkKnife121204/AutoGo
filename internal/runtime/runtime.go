@@ -44,21 +44,31 @@ func Build(cfg config.Config) (*Runtime, error) {
 		return nil, errors.New("Laravel-сервис не настроен")
 	}
 
-	gateNames := make(map[string]string)
+	var decider access.Decider
+	var err error
 
-	for _, checkpoint := range cfg.Checkpoints {
-		for _, lane := range checkpoint.Lanes {
-			gateNames[lane.ID] = lane.GateName
+	switch laravelService.Mode {
+	case "", config.ServiceModeReal:
+		gateNames := make(map[string]string)
+		for _, checkpoint := range cfg.Checkpoints {
+			for _, lane := range checkpoint.Lanes {
+				gateNames[lane.ID] = lane.GateName
+			}
 		}
-	}
-
-	decider, err := access.NewLaravelDecider(
-		laravelService.Address,
-		laravelService.Timeout,
-		gateNames,
-	)
-	if err != nil {
-		return nil, err
+		decider, err = access.NewLaravelDecider(
+			laravelService.Address,
+			laravelService.Timeout,
+			gateNames,
+		)
+		if err != nil {
+			return nil, err
+		}
+	case config.ServiceModeStub:
+		decider = access.NewStubDecider()
+	case config.ServiceModeDisabled:
+		decider = &access.DisabledDecider{}
+	default:
+		return nil, errors.New("неизвестный режим Laravel: " + laravelService.Mode)
 	}
 
 	axxonServices, err := buildAxxonClients(cfg.Services)
@@ -84,6 +94,7 @@ func Build(cfg config.Config) (*Runtime, error) {
 		barriers,
 		decider,
 		axxonServices,
+		cfg.Services,
 	)
 	if err != nil {
 		closePLCClients(controllers)

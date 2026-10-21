@@ -1,29 +1,36 @@
 package axxon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	Address  string
-	Server   string
-	Username string
-	Password string
-	Timeout  time.Duration
+	Address      string
+	VideoAddress string
+	Server       string
+	Username     string
+	Password     string
+	Timeout      time.Duration
 }
 
 type Client struct {
-	address  string
-	server   string
-	username string
-	password string
+	address      string
+	server       string
+	username     string
+	password     string
+	photoFile    string
+	videoFile    string
+	videoAddress string
 
 	httpClient *http.Client
 }
@@ -69,15 +76,54 @@ func New(config Config) (*Client, error) {
 		)
 	}
 
+	if strings.TrimSpace(config.VideoAddress) != "" {
+		parsedVideo, err := url.Parse(config.VideoAddress)
+		if err != nil || (parsedVideo.Scheme != "http" && parsedVideo.Scheme != "https") || parsedVideo.Host == "" {
+			return nil, fmt.Errorf("некорректный video_address: %q", config.VideoAddress)
+		}
+	}
+
 	return &Client{
-		address:  address,
-		server:   server,
-		username: config.Username,
-		password: config.Password,
+		address:      address,
+		videoAddress: strings.TrimRight(strings.TrimSpace(config.VideoAddress), "/"),
+		server:       server,
+		username:     config.Username,
+		password:     config.Password,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
 	}, nil
+}
+
+func NewStub(photoFile string, videoFiles ...string) (*Client, error) {
+	photoFile = strings.TrimSpace(photoFile)
+	if photoFile == "" {
+		return nil, errors.New("путь к тестовому JPEG не указан")
+	}
+	if _, err := readStubJPEG(photoFile); err != nil {
+		return nil, err
+	}
+	var videoFile string
+	if len(videoFiles) > 0 {
+		videoFile = strings.TrimSpace(videoFiles[0])
+		if videoFile != "" {
+			if err := validateMP4(videoFile); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return &Client{photoFile: photoFile, videoFile: videoFile}, nil
+}
+
+func readStubJPEG(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("чтение тестового JPEG %q: %w", path, err)
+	}
+	if _, err := jpeg.DecodeConfig(bytes.NewReader(data)); err != nil {
+		return nil, fmt.Errorf("файл %q не является корректным JPEG: %w", path, err)
+	}
+	return data, nil
 }
 
 func (c *Client) Snapshot(
@@ -90,6 +136,20 @@ func (c *Client) Snapshot(
 		return nil, errors.New(
 			"ID камеры Axxon не указан",
 		)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if c.photoFile != "" {
+		image, err := readStubJPEG(c.photoFile)
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return image, nil
 	}
 
 	snapshotURL :=

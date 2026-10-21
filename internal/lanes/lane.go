@@ -15,6 +15,7 @@ import (
 	"AutoGo/internal/plc"
 	"AutoGo/internal/plcclient"
 	"AutoGo/internal/scenarios"
+	"AutoGo/internal/video"
 )
 
 const (
@@ -38,19 +39,20 @@ type Lane struct {
 	decider     access.Decider
 	sources     []*devices.Source
 	services    map[string]*axxon.Client
+	video       *video.Recorder
 
-	mu                sync.Mutex
-	mode              Mode
-	stoppedFrom       lanestatus.State
-	activeVehicle     *VehicleContext
-	lastState         lanestatus.State
-	lastContext       access.ContextUpdate
-	notifyQueue       chan access.ContextUpdate
-	notifyDone        chan struct{}
-	pending           []*VehicleContext
-	queue             []*VehicleContext
-	queueDepth        int
-	BidirectionalMode bool
+	mu                    sync.Mutex
+	mode                  Mode
+	stoppedFrom           lanestatus.State
+	activeVehicle         *VehicleContext
+	lastState             lanestatus.State
+	lastNotifiedPLCStates map[string]string
+	notifyQueue           chan access.ContextUpdate
+	notifyDone            chan struct{}
+	pending               []*VehicleContext
+	queue                 []*VehicleContext
+	queueDepth            int
+	BidirectionalMode     bool
 
 	cachedPlate          string
 	cachedPlateAt        time.Time
@@ -101,21 +103,40 @@ func New(
 	}
 
 	return &Lane{
-		ID:                id,
-		Name:              name,
-		CheckpointID:      checkpointID,
-		Scenario:          scenario,
-		releaseMode:       scenario.ReleaseMode(),
-		decider:           decider,
-		sources:           sources,
-		services:          services,
-		mode:              defaultMode,
-		queueDepth:        queueDepth,
-		BidirectionalMode: bidirectionalMode,
-		previousPLCStates: make(map[string]string),
-		expectedPLCInit:   make(map[string]time.Time),
-		notifyQueue:       make(chan access.ContextUpdate, 64),
+		ID:                    id,
+		Name:                  name,
+		CheckpointID:          checkpointID,
+		Scenario:              scenario,
+		releaseMode:           scenario.ReleaseMode(),
+		decider:               decider,
+		sources:               sources,
+		services:              services,
+		mode:                  defaultMode,
+		queueDepth:            queueDepth,
+		BidirectionalMode:     bidirectionalMode,
+		previousPLCStates:     make(map[string]string),
+		lastNotifiedPLCStates: make(map[string]string),
+		expectedPLCInit:       make(map[string]time.Time),
+		notifyQueue:           make(chan access.ContextUpdate, 64),
 	}, nil
+}
+
+func (l *Lane) SetVideoRecorder(recorder *video.Recorder) {
+	l.video = recorder
+}
+
+func (l *Lane) VideoStatus() (bool, time.Time, time.Time) {
+	if l.video == nil {
+		return false, time.Time{}, time.Time{}
+	}
+	return l.video.Status()
+}
+
+func (l *Lane) CurrentVideoFile() (string, error) {
+	if l.video == nil {
+		return "", video.ErrNotRecording
+	}
+	return l.video.CurrentFile()
 }
 
 func (l *Lane) ScenarioType() string {
@@ -160,13 +181,15 @@ func (l *Lane) ManualBarrierCommand(barrier *devices.Barrier, command string) er
 func (l *Lane) Start() error {
 	l.mu.Lock()
 	err := l.startLocked()
+	if err == nil {
+		l.logStateChangeLocked()
+	}
 	l.mu.Unlock()
 	if err != nil {
 		return err
 	}
 
 	log.Printf("[lane %s] mode -> automatic", l.ID)
-	l.logStateChange()
 	return nil
 }
 
@@ -208,15 +231,15 @@ func (l *Lane) Stop() error {
 	}
 
 	l.mode = ModeManual
+	if l.video != nil {
+		l.video.StopSequence()
+	}
 	l.previousPLCStates = make(map[string]string)
 	l.expectedPLCInit = make(map[string]time.Time)
-
+	l.logStateChangeLocked()
 	l.mu.Unlock()
 
 	log.Printf("[lane %s] mode -> manual", l.ID)
-
-	l.logStateChange()
-
 	return nil
 }
 
@@ -233,18 +256,17 @@ func (l *Lane) Reset() error {
 
 	if state == lanestatus.StateStopping {
 		err = l.startLocked()
-		l.mu.Unlock()
-		if err != nil {
-			return err
+		if err == nil {
+			l.logStateChangeLocked()
 		}
-		l.logStateChange()
-		return nil
+		l.mu.Unlock()
+		return err
 	}
 
 	if state == lanestatus.StateIdentEntrance {
 		l.activeVehicle = nil
+		l.logStateChangeLocked()
 		l.mu.Unlock()
-		l.logStateChange()
 		return nil
 	}
 
@@ -283,8 +305,8 @@ func (l *Lane) Reset() error {
 	}
 
 	l.activeVehicle = nil
+	l.logStateChangeLocked()
 	l.mu.Unlock()
-	l.logStateChange()
 
 	return nil
 }
@@ -313,8 +335,8 @@ func (l *Lane) Confirm() error {
 		vehicle.StartUncertain = true
 	}
 
+	l.logStateChangeLocked()
 	l.mu.Unlock()
-	l.logStateChange()
 	return err
 }
 
@@ -335,9 +357,8 @@ func (l *Lane) Reject() error {
 	if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
 		vehicle.StartUncertain = true
 	}
+	l.logStateChangeLocked()
 	l.mu.Unlock()
-
-	l.logStateChange()
 	return err
 }
 
@@ -656,6 +677,7 @@ func (l *Lane) beginVehicleLocked(vehicle *VehicleContext) error {
 		l.photo = vehicle.Photo
 		l.photoCapturedAt = vehicle.PhotoCapturedAt
 	}
+	l.logStateChangeLocked()
 	return nil
 }
 
@@ -892,7 +914,7 @@ func (l *Lane) StartPoller() {
 			}
 		}
 	}()
-	go l.logStateChange()
+	l.logStateChange()
 }
 
 func (l *Lane) StopPoller() {
@@ -904,6 +926,9 @@ func (l *Lane) StopPoller() {
 
 	<-l.pollerDone
 	<-l.notifyDone
+	if l.video != nil {
+		l.video.Close()
+	}
 
 	l.stopPoller = nil
 }
@@ -912,6 +937,7 @@ func (l *Lane) poll() {
 	l.mu.Lock()
 	if l.mode != ModeAutomatic {
 		l.mu.Unlock()
+		l.logStateChange()
 		return
 	}
 
@@ -1031,9 +1057,9 @@ func (l *Lane) poll() {
 		if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
 			vehicle.StartUncertain = true
 		}
+		l.logStateChangeLocked()
 		l.mu.Unlock()
 		log.Printf("[lane %s] poll advance error: %v", l.ID, err)
-		l.logStateChange()
 		return
 	}
 
@@ -1041,16 +1067,19 @@ func (l *Lane) poll() {
 		l.clearVehicleLocked(vehicle)
 	}
 
+	l.logStateChangeLocked()
 	l.mu.Unlock()
-	l.logStateChange()
 }
 
 func (l *Lane) logStateChange() {
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.logStateChangeLocked()
+}
 
+func (l *Lane) logStateChangeLocked() {
 	snapshot, err := l.Scenario.Snapshot()
 	if err != nil {
-		l.mu.Unlock()
 		return
 	}
 
@@ -1059,9 +1088,41 @@ func (l *Lane) logStateChange() {
 	changed := state != prev
 	l.lastState = state
 
+	plcChanged := false
+	for id, device := range snapshot.Devices {
+		if device.Type != "barrier" {
+			continue
+		}
+		if old, exists := l.lastNotifiedPLCStates[id]; exists && old != device.State {
+			plcChanged = true
+		}
+		l.lastNotifiedPLCStates[id] = device.State
+	}
+
+	if changed {
+		log.Printf("[lane %s] state %s -> %s", l.ID, stateOrInitial(prev), state)
+		if l.video != nil {
+			if prev == lanestatus.StateConfirm && state != lanestatus.StateConfirm {
+				l.video.StopSequence()
+			}
+			if prev != lanestatus.StateConfirm && state == lanestatus.StateConfirm {
+				l.video.StartSequence()
+			}
+		}
+	}
+
+	if !changed && !plcChanged {
+		return
+	}
+
+	if _, ok := l.decider.(interface {
+		NotifyContext(context.Context, access.ContextUpdate) error
+	}); !ok {
+		return
+	}
+
 	direction := "normal"
 	identification := ""
-
 	if vehicle := l.activeVehicle; vehicle != nil {
 		direction = vehicle.Direction
 		identification = vehicle.Plate
@@ -1082,25 +1143,10 @@ func (l *Lane) logStateChange() {
 		Identification: identification,
 	}
 
-	if update != l.lastContext {
-		select {
-		case l.notifyQueue <- update:
-			l.lastContext = update
-		default:
-			log.Printf(
-				"[lane %s] очередь уведомлений Laravel заполнена",
-				l.ID,
-			)
-		}
-	}
-
-	l.mu.Unlock()
-
-	if changed {
-		log.Printf(
-			"[lane %s] state %s -> %s",
-			l.ID, stateOrInitial(prev), state,
-		)
+	select {
+	case l.notifyQueue <- update:
+	default:
+		log.Printf("[lane %s] очередь уведомлений Laravel заполнена: state=%s", l.ID, update.State)
 	}
 }
 
@@ -1172,14 +1218,9 @@ func (l *Lane) NextState() error {
 		l.clearVehicleLocked(vehicle)
 	}
 
+	l.logStateChangeLocked()
 	l.mu.Unlock()
-
-	if err != nil {
-		return err
-	}
-
-	l.logStateChange()
-	return nil
+	return err
 }
 
 func (l *Lane) PrevState() error {
@@ -1211,12 +1252,9 @@ func (l *Lane) PrevState() error {
 		vehicle.StartUncertain = true
 	}
 
+	l.logStateChangeLocked()
 	l.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	l.logStateChange()
-	return nil
+	return err
 }
 
 func (l *Lane) startPhotoCapture(
@@ -1469,25 +1507,35 @@ func (l *Lane) notifyContextLoop() {
 		return
 	}
 
+	const maxRetries = 3
+	const retryDelay = time.Second
+
 	for {
 		select {
 		case <-l.stopPoller:
 			return
-
 		case update := <-l.notifyQueue:
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				10*time.Second,
-			)
+			for attempt := 0; attempt <= maxRetries; attempt++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				err := notifier.NotifyContext(ctx, update)
+				cancel()
 
-			err := notifier.NotifyContext(ctx, update)
-			cancel()
+				if err == nil {
+					break
+				}
+				if attempt == maxRetries {
+					log.Printf("[lane %s] Laravel context: state=%s, не отправлено после %d попыток: %v",
+						l.ID, update.State, maxRetries+1, err)
+					break
+				}
 
-			if err != nil {
-				log.Printf(
-					"[lane %s] ошибка отправки контекста Laravel: %v",
-					l.ID, err,
-				)
+				log.Printf("[lane %s] Laravel context: state=%s, попытка %d/%d неудачна: %v",
+					l.ID, update.State, attempt+1, maxRetries+1, err)
+				select {
+				case <-l.stopPoller:
+					return
+				case <-time.After(retryDelay):
+				}
 			}
 		}
 	}

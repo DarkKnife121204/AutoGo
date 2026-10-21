@@ -9,6 +9,7 @@ import (
 	"AutoGo/internal/lanes"
 	"AutoGo/internal/plcclient"
 	"AutoGo/internal/scenarios"
+	"AutoGo/internal/video"
 	"errors"
 	"fmt"
 	"log"
@@ -114,6 +115,7 @@ func buildLanes(
 	barriers map[string]*devices.Barrier,
 	decider access.Decider,
 	axxonServices map[string]*axxon.Client,
+	serviceConfigs []config.ServiceConfig,
 ) (
 	map[string]*lanes.Lane,
 	map[string]*lanes.Lane,
@@ -253,6 +255,10 @@ func buildLanes(
 					laneConfig.BidirectionalMode,
 				)
 				if err != nil {
+					return nil, nil, nil, err
+				}
+
+				if err := bindVideoRecorder(lane, laneConfig, axxonServices, serviceConfigs); err != nil {
 					return nil, nil, nil, err
 				}
 
@@ -398,13 +404,28 @@ func buildAxxonClients(
 			continue
 		}
 
+		switch service.Mode {
+		case config.ServiceModeDisabled:
+			log.Printf("[axxon %s] отключён", service.ID)
+			continue
+		case config.ServiceModeStub:
+			client, err := axxon.NewStub(service.PhotoFile, service.VideoFile)
+			if err != nil {
+				return nil, fmt.Errorf("создание тестового Axxon %q: %w", service.ID, err)
+			}
+			clients[service.ID] = client
+			log.Printf("[axxon %s] stub: JPEG из %s", service.ID, service.PhotoFile)
+			continue
+		}
+
 		client, err := axxon.New(
 			axxon.Config{
-				Address:  service.Address,
-				Server:   service.Server,
-				Username: service.Username,
-				Password: service.Password,
-				Timeout:  service.Timeout,
+				Address:      service.Address,
+				VideoAddress: service.VideoAddress,
+				Server:       service.Server,
+				Username:     service.Username,
+				Password:     service.Password,
+				Timeout:      service.Timeout,
 			},
 		)
 		if err != nil {
@@ -419,4 +440,41 @@ func buildAxxonClients(
 	}
 
 	return clients, nil
+}
+
+func bindVideoRecorder(lane *lanes.Lane, cfg config.LaneConfig, clients map[string]*axxon.Client, services []config.ServiceConfig) error {
+	if cfg.VideoService == "" && cfg.VideoCameraID == "" {
+		return nil
+	}
+	if cfg.VideoService == "" || cfg.VideoCameraID == "" {
+		return fmt.Errorf("линия %q: video_service и video_camera_id задаются вместе", cfg.ID)
+	}
+	var svc *config.ServiceConfig
+	for i := range services {
+		if services[i].ID == cfg.VideoService {
+			svc = &services[i]
+			break
+		}
+	}
+	if svc == nil || svc.Type != config.ServiceTypeAxxon {
+		return fmt.Errorf("линия %q: video_service %q не найден или не Axxon", cfg.ID, cfg.VideoService)
+	}
+	if svc.Mode == config.ServiceModeDisabled {
+		return nil
+	}
+	if (svc.Mode == "" || svc.Mode == config.ServiceModeReal) && svc.VideoAddress == "" {
+		return fmt.Errorf("линия %q: video_address обязателен для real-записи", cfg.ID)
+	}
+	if svc.Mode == config.ServiceModeStub && svc.VideoFile == "" {
+		return fmt.Errorf("линия %q: video_file обязателен для stub-записи", cfg.ID)
+	}
+	if svc.VideoDuration <= 0 || svc.VideoStartDelay < 0 {
+		return fmt.Errorf("линия %q: видео требует video_duration > 0 и video_start_delay >= 0", cfg.ID)
+	}
+	recorder, err := video.New(clients[svc.ID], cfg.VideoCameraID, svc.VideoStartDelay, svc.VideoDuration)
+	if err != nil {
+		return fmt.Errorf("линия %q: создание видеорекордера: %w", cfg.ID, err)
+	}
+	lane.SetVideoRecorder(recorder)
+	return nil
 }

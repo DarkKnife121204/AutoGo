@@ -21,6 +21,7 @@ WORKDIR /app
 
 COPY --from=builder /autogo /usr/local/bin/autogo
 COPY --from=builder /app/config /app/config
+COPY --from=builder /app/testdata /app/testdata
 
 USER autogo
 

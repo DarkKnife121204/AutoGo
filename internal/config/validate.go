@@ -11,6 +11,10 @@ const (
 	ServiceTypeAxxon   = "axxon"
 	ServiceTypeLaravel = "laravel"
 
+	ServiceModeReal     = "real"
+	ServiceModeStub     = "stub"
+	ServiceModeDisabled = "disabled"
+
 	ControllerTypeSiemens = "siemens"
 
 	DeviceTypeBarrier      = "barrier"
@@ -531,6 +535,15 @@ func validateLane(
 		laneDeviceIDs[deviceID] = struct{}{}
 	}
 
+	if lane.VideoService != "" || lane.VideoCameraID != "" {
+		if lane.Scenario.Type != ScenarioTypeDoubleBarrier {
+			validationErrors = append(validationErrors, fmt.Errorf("%s: video_* поддерживается только для double_barrier", path))
+		}
+		if strings.TrimSpace(lane.VideoService) == "" || strings.TrimSpace(lane.VideoCameraID) == "" {
+			validationErrors = append(validationErrors, fmt.Errorf("%s: video_service и video_camera_id задаются вместе", path))
+		}
+	}
+
 	if err := validateScenario(
 		path+".scenario",
 		lane.Scenario,
@@ -761,46 +774,47 @@ func validateReleaseMode(
 	}
 }
 
-func validateService(
-	path string,
-	service ServiceConfig,
-) error {
+func validateService(path string, service ServiceConfig) error {
 	var validationErrors []error
 
 	switch strings.TrimSpace(service.Type) {
-	case ServiceTypeAxxon:
-		if strings.TrimSpace(service.Server) == "" {
-			validationErrors = append(
-				validationErrors,
-				fmt.Errorf("%s.server обязателен", path),
-			)
+	case ServiceTypeAxxon, ServiceTypeLaravel:
+	default:
+		validationErrors = append(validationErrors,
+			fmt.Errorf("%s.type содержит неизвестный тип %q", path, service.Type))
+	}
+
+	if service.VideoStartDelay < 0 || service.VideoDuration < 0 {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("%s: параметры задержки и длительности видео не должны быть отрицательными", path))
+	}
+
+	mode := strings.TrimSpace(service.Mode)
+	switch mode {
+	case "", ServiceModeReal:
+		if strings.TrimSpace(service.Address) == "" {
+			validationErrors = append(validationErrors,
+				fmt.Errorf("%s.address обязателен для mode=real", path))
+		}
+		if service.Timeout <= 0 {
+			validationErrors = append(validationErrors,
+				fmt.Errorf("%s.timeout должен быть больше 0 для mode=real", path))
+		}
+		if service.Type == ServiceTypeAxxon && strings.TrimSpace(service.Server) == "" {
+			validationErrors = append(validationErrors,
+				fmt.Errorf("%s.server обязателен для Axxon mode=real", path))
 		}
 
-	case ServiceTypeLaravel:
+	case ServiceModeStub:
+		if service.Type == ServiceTypeAxxon && strings.TrimSpace(service.PhotoFile) == "" {
+			validationErrors = append(validationErrors,
+				fmt.Errorf("%s.photo_file обязателен для Axxon mode=stub", path))
+		}
 
+	case ServiceModeDisabled:
 	default:
-		validationErrors = append(
-			validationErrors,
-			fmt.Errorf(
-				"%s.type содержит неизвестный тип %q",
-				path,
-				service.Type,
-			),
-		)
-	}
-
-	if strings.TrimSpace(service.Address) == "" {
-		validationErrors = append(
-			validationErrors,
-			fmt.Errorf("%s.address обязателен", path),
-		)
-	}
-
-	if service.Timeout <= 0 {
-		validationErrors = append(
-			validationErrors,
-			fmt.Errorf("%s.timeout должен быть больше 0", path),
-		)
+		validationErrors = append(validationErrors,
+			fmt.Errorf("%s.mode содержит неизвестный режим %q (real, stub, disabled)", path, service.Mode))
 	}
 
 	return errors.Join(validationErrors...)

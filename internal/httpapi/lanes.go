@@ -2,12 +2,15 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
 	"AutoGo/internal/lanes"
 	"AutoGo/internal/lanestatus"
+	"AutoGo/internal/video"
 )
 
 func (a *API) laneContext(
@@ -55,9 +58,7 @@ func (a *API) makeLaneContext(
 			HasPhoto: false,
 		},
 
-		VideoInfo: videoInfoResponse{
-			HasVideoRecording: false,
-		},
+		VideoInfo: videoInfoResponse{},
 
 		OperationsStatus: operationsStatusResponse{
 			IsPhotoCaptureInProgress: photoCaptureInProgress,
@@ -74,6 +75,25 @@ func (a *API) makeLaneContext(
 				CachedValidation:     nil,
 			},
 		},
+	}
+
+	recording, videoStart, videoStop := lane.VideoStatus()
+	response.VideoInfo.HasVideoRecording = recording
+	response.OperationsStatus.IsVideoRecordingInProgress = recording
+	if !videoStart.IsZero() {
+		response.VideoInfo.StartTime = &videoStart
+	}
+	if !videoStop.IsZero() {
+		response.VideoInfo.StopTime = &videoStop
+	}
+	if !videoStart.IsZero() && !videoStop.IsZero() {
+		seconds := int(videoStop.Sub(videoStart).Seconds())
+		duration := fmt.Sprintf("%02d:%02d:%02d", seconds/3600, (seconds/60)%60, seconds%60)
+		response.VideoInfo.RecordingDuration = &duration
+	}
+	if recording {
+		url := "/api/v1/autogate/video/current"
+		response.VideoInfo.VideoURL = &url
 	}
 
 	if direction != "" {
@@ -383,4 +403,23 @@ func isCommandAllowed(state lanestatus.State, command string) bool {
 	default:
 		return command == "Reset"
 	}
+}
+
+func (a *API) laneVideoCurrent(w http.ResponseWriter, r *http.Request, lane *lanes.Lane) {
+	file, err := lane.CurrentVideoFile()
+	if errors.Is(err, video.ErrDownloadUnavailable) {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{
+			"errorType": "VideoDownloadNotSupported",
+			"message":   "Оригинальный Axxon API управляет записью, но не выгружает MP4",
+		})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"errorType": "VideoNotFound", "message": "Текущей видеозаписи нет",
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "video/mp4")
+	http.ServeFile(w, r, file)
 }

@@ -1,21 +1,31 @@
-version: 1
+version: "1"
 
 site:
   id: site-1
   name: Площадка №1
 
 services:
-#  - id: axxon-main
-#    type: axxon
-#    address: ""
-#    server: ""
-#    username: ""
-#    password: ""
-#    timeout: 5s
+  - id: axxon-main
+    type: axxon
+    mode: stub # real | stub | disabled
+    photo_file: testdata/photo.jpg
+    video_file: testdata/video.mp4
+    video_start_delay: 2s
+    video_duration: 10s
+    # video_address: http://192.168.1.10:8081 # для real, Axxon API
+#     Для real нужны адрес, server и timeout:
+#     address: http://192.168.1.10:8080
+#     server: AxxonServer
+#     username: ""
+#     password: ""
+#     timeout: 5s
+
   - id: laravel-backend
     type: laravel
-    address: ${LARAVEL_API_URL}
-    timeout: 8s
+    mode: stub # real | stub | disabled
+#     Для real нужны address и timeout:
+#    address: ${LARAVEL_API_URL}
+#    timeout: 8s
 
 controllers:
   - id: plc-1
@@ -102,6 +112,8 @@ checkpoints:
         name: Линия №2 (шлюз)
         mode: automatic
         bidirectional_mode: true
+        video_service: axxon-main
+        video_camera_id: "0"
         devices:
           - barrier-2
           - barrier-3

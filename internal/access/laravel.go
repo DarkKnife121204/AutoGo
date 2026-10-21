@@ -14,9 +14,10 @@ import (
 )
 
 type LaravelDecider struct {
-	baseURL   string
-	client    *http.Client
-	gateNames map[string]string
+	baseURL      string
+	client       *http.Client
+	notifyClient *http.Client
+	gateNames    map[string]string
 }
 
 func NewLaravelDecider(address string, timeout time.Duration, gateNames map[string]string) (*LaravelDecider, error) {
@@ -32,9 +33,10 @@ func NewLaravelDecider(address string, timeout time.Duration, gateNames map[stri
 	}
 
 	return &LaravelDecider{
-		baseURL:   address,
-		client:    &http.Client{Timeout: timeout},
-		gateNames: gateNames,
+		baseURL:      address,
+		client:       &http.Client{Timeout: timeout},
+		notifyClient: &http.Client{Timeout: 10 * time.Second},
+		gateNames:    gateNames,
 	}, nil
 }
 
