@@ -44,6 +44,9 @@ type Lane struct {
 	stoppedFrom       lanestatus.State
 	activeVehicle     *VehicleContext
 	lastState         lanestatus.State
+	lastContext       access.ContextUpdate
+	notifyQueue       chan access.ContextUpdate
+	notifyDone        chan struct{}
 	pending           []*VehicleContext
 	queue             []*VehicleContext
 	queueDepth        int
@@ -111,6 +114,7 @@ func New(
 		BidirectionalMode: bidirectionalMode,
 		previousPLCStates: make(map[string]string),
 		expectedPLCInit:   make(map[string]time.Time),
+		notifyQueue:       make(chan access.ContextUpdate, 64),
 	}, nil
 }
 
@@ -287,6 +291,7 @@ func (l *Lane) Reset() error {
 
 func (l *Lane) Confirm() error {
 	l.mu.Lock()
+
 	if l.mode != ModeAutomatic {
 		l.mu.Unlock()
 		return errors.New("подтверждение недоступно: линия не в автоматическом режиме")
@@ -298,12 +303,17 @@ func (l *Lane) Confirm() error {
 		return errors.New("подтверждение недоступно: нет активной машины или результат PLC-команды неизвестен")
 	}
 
+	if !vehicle.validationCurrent() {
+		l.mu.Unlock()
+		return errors.New("подтверждение запрещено: разрешение Laravel отсутствует или истекло")
+	}
+
 	err := l.Scenario.Confirm()
 	if errors.Is(err, plcclient.ErrWriteOutcomeUnknown) {
 		vehicle.StartUncertain = true
 	}
-	l.mu.Unlock()
 
+	l.mu.Unlock()
 	l.logStateChange()
 	return err
 }
@@ -338,165 +348,86 @@ func (l *Lane) trigger(
 	direction string,
 ) error {
 	if (plate == "") == (keyCode == "") {
-		return errors.New(
-			"должен быть указан либо plate, либо key_code",
-		)
+		return errors.New("должен быть указан либо plate, либо key_code")
 	}
 
 	if direction == "" {
 		direction = "normal"
 	}
-
 	if direction != "normal" && direction != "reverse" {
 		return errors.New("неизвестное направление движения")
 	}
-
 	if direction == "reverse" && !l.BidirectionalMode {
 		return errors.New("обратное направление запрещено для этой линии")
 	}
 
 	l.mu.Lock()
+	l.pruneExpiredQueueLocked()
 
 	if l.mode == ModeManual {
 		if l.isDuplicateLocked(source, plate, keyCode) {
 			l.mu.Unlock()
-
-			return errors.New(
-				"повторное событие по тому же идентификатору игнорируется",
-			)
+			return errors.New("повторное событие по тому же идентификатору игнорируется")
 		}
-
 		if l.queueDepth <= 0 {
 			l.cacheIdentificationLocked(source, plate, keyCode, direction)
 			l.mu.Unlock()
 			return nil
 		}
-
 		if len(l.pending)+len(l.queue) >= l.queueDepth {
 			l.mu.Unlock()
-
-			return errors.New(
-				"очередь заполнена",
-			)
+			return errors.New("очередь заполнена")
 		}
 
 		l.cacheIdentificationLocked(source, plate, keyCode, direction)
-
 		vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
-
-		if l.releaseMode != releaseModeExternalConfirmation {
-			l.queue = append(l.queue, vehicle)
-			l.mu.Unlock()
-
-			l.startPhotoCapture(vehicle)
-
-			log.Printf(
-				"[lane %s] queued in manual: value=%s",
-				l.ID,
-				vehicle.identity(),
-			)
-
-			return nil
-		}
-
 		l.pending = append(l.pending, vehicle)
 		l.mu.Unlock()
 
 		l.startPhotoCapture(vehicle)
-
-		log.Printf(
-			"[lane %s] pending in manual: value=%s",
-			l.ID,
-			vehicle.identity(),
-		)
-
 		go l.decidePending(vehicle)
 
+		log.Printf("[lane %s] pending in manual: value=%s", l.ID, vehicle.identity())
 		return nil
 	}
 
-	if l.activeVehicle == nil &&
-		len(l.queue) == 0 &&
-		len(l.pending) == 0 {
+	if l.activeVehicle == nil && len(l.queue) == 0 && len(l.pending) == 0 {
 		l.clearIdentificationCacheLocked()
-
 		vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
-
-		l.photoVehicleID = vehicle.ID
-		l.photoCaptureInProgress = false
-		if l.releaseMode == releaseModeExternalConfirmation {
-			vehicle.Waiting = true
-			l.activeVehicle = vehicle
-			l.mu.Unlock()
-
-			l.startPhotoCapture(vehicle)
-
-			go l.decideAsync(vehicle)
-
-			return nil
-		}
-
 		vehicle.Waiting = true
 		l.activeVehicle = vehicle
+		l.photoVehicleID = vehicle.ID
+		l.photoCaptureInProgress = false
 		l.mu.Unlock()
 
 		l.startPhotoCapture(vehicle)
-
+		go l.decideAsync(vehicle)
 		return nil
 	}
 
 	if l.isDuplicateLocked(source, plate, keyCode) {
 		l.mu.Unlock()
-
-		return errors.New(
-			"повторное событие по тому же идентификатору игнорируется",
-		)
+		return errors.New("повторное событие по тому же идентификатору игнорируется")
 	}
-
 	if l.queueDepth <= 0 {
 		l.cacheIdentificationLocked(source, plate, keyCode, direction)
 		l.mu.Unlock()
 		return nil
 	}
-
 	if len(l.pending)+len(l.queue) >= l.queueDepth {
 		l.mu.Unlock()
-
-		return errors.New(
-			"очередь заполнена",
-		)
+		return errors.New("очередь заполнена")
 	}
 
 	l.cacheIdentificationLocked(source, plate, keyCode, direction)
-
 	vehicle := l.newVehicleLocked(source, plate, keyCode, direction)
-
-	if l.releaseMode != releaseModeExternalConfirmation {
-		l.queue = append(l.queue, vehicle)
-		l.mu.Unlock()
-
-		l.startPhotoCapture(vehicle)
-
-		log.Printf(
-			"[lane %s] queued (immediate): value=%s",
-			l.ID, vehicle.identity(),
-		)
-
-		return nil
-	}
-
 	l.pending = append(l.pending, vehicle)
 	l.mu.Unlock()
 
 	l.startPhotoCapture(vehicle)
-
-	log.Printf(
-		"[lane %s] pending (awaiting decision): value=%s",
-		l.ID, vehicle.identity(),
-	)
-
 	go l.decidePending(vehicle)
 
+	log.Printf("[lane %s] pending (awaiting decision): value=%s", l.ID, vehicle.identity())
 	return nil
 }
 
@@ -516,7 +447,7 @@ func (l *Lane) newVehicleLocked(
 		KeyCode:   keyCode,
 		Source:    string(source),
 		Direction: direction,
-		Approved:  l.releaseMode != releaseModeExternalConfirmation,
+		Approved:  false,
 		StartedAt: time.Now(),
 		source:    source,
 	}
@@ -596,9 +527,7 @@ func (l *Lane) decidePending(vehicle *VehicleContext) {
 		return
 	}
 
-	allowed := decision.Allowed &&
-		decision.PlateType != "" &&
-		decision.PlateType != access.PlateTypeInvalid
+	allowed := decision.Allowed && (decision.PlateType == access.PlateTypeRegular || decision.PlateType == access.PlateTypeVIP)
 
 	l.mu.Lock()
 
@@ -653,7 +582,28 @@ func (l *Lane) removePendingLocked(vehicle *VehicleContext) {
 	}
 }
 
+func (l *Lane) pruneExpiredQueueLocked() {
+	kept := l.queue[:0]
+
+	for _, vehicle := range l.queue {
+		if !vehicle.validationCurrent() {
+			log.Printf(
+				"[lane %s] queue validation expired: value=%s",
+				l.ID,
+				vehicle.identity(),
+			)
+			continue
+		}
+
+		kept = append(kept, vehicle)
+	}
+
+	l.queue = kept
+}
+
 func (l *Lane) takeQueueHeadLocked() *VehicleContext {
+	l.pruneExpiredQueueLocked()
+
 	if l.mode != ModeAutomatic ||
 		l.activeVehicle != nil ||
 		len(l.queue) == 0 {
@@ -672,11 +622,11 @@ func (l *Lane) takeQueueHeadLocked() *VehicleContext {
 	}
 
 	head := l.queue[0]
-	if !head.Approved {
+	if !head.validationCurrent() {
 		return nil
 	}
-	l.queue = l.queue[1:]
 
+	l.queue = l.queue[1:]
 	l.clearIdentificationCacheLocked()
 	head.Waiting = true
 	l.activeVehicle = head
@@ -762,9 +712,7 @@ func (l *Lane) decideAsync(vehicle *VehicleContext) {
 }
 
 func (l *Lane) applyDecision(vehicle *VehicleContext, decision access.Decision) {
-	allowed := decision.Allowed &&
-		decision.PlateType != "" &&
-		decision.PlateType != access.PlateTypeInvalid
+	allowed := decision.Allowed && (decision.PlateType == access.PlateTypeRegular || decision.PlateType == access.PlateTypeVIP)
 
 	log.Printf("[lane %s] decision: value=%s allowed=%v",
 		l.ID, vehicle.identity(), allowed)
@@ -926,6 +874,8 @@ func deriveState(
 func (l *Lane) StartPoller() {
 	l.stopPoller = make(chan struct{})
 	l.pollerDone = make(chan struct{})
+	l.notifyDone = make(chan struct{})
+	go l.notifyContextLoop()
 
 	go func() {
 		defer close(l.pollerDone)
@@ -942,6 +892,7 @@ func (l *Lane) StartPoller() {
 			}
 		}
 	}()
+	go l.logStateChange()
 }
 
 func (l *Lane) StopPoller() {
@@ -950,7 +901,10 @@ func (l *Lane) StopPoller() {
 	}
 
 	close(l.stopPoller)
+
 	<-l.pollerDone
+	<-l.notifyDone
+
 	l.stopPoller = nil
 }
 
@@ -960,6 +914,8 @@ func (l *Lane) poll() {
 		l.mu.Unlock()
 		return
 	}
+
+	l.pruneExpiredQueueLocked()
 
 	if l.activeVehicle == nil || len(l.expectedPLCInit) > 0 {
 		snapshot, err := l.Scenario.Snapshot()
@@ -1010,9 +966,7 @@ func (l *Lane) poll() {
 						l.photoCaptureInProgress = false
 						l.mu.Unlock()
 						l.startPhotoCapture(cached)
-						if l.releaseMode == releaseModeExternalConfirmation {
-							go l.decideAsync(cached)
-						}
+						go l.decideAsync(cached)
 						l.logStateChange()
 						return
 					}
@@ -1035,8 +989,7 @@ func (l *Lane) poll() {
 	}
 
 	if vehicle.Waiting {
-		if l.releaseMode == releaseModeExternalConfirmation &&
-			vehicle.Approved && !vehicle.validationCurrent() {
+		if vehicle.Approved && !vehicle.validationCurrent() {
 
 			log.Printf(
 				"[lane %s] validation expired before Start: value=%s",
@@ -1067,8 +1020,7 @@ func (l *Lane) poll() {
 		return
 	}
 
-	validationValid := l.releaseMode != releaseModeExternalConfirmation ||
-		vehicle.validationCurrent()
+	validationValid := vehicle.validationCurrent()
 
 	done, err := l.Scenario.Advance(
 		validationValid,
@@ -1103,20 +1055,53 @@ func (l *Lane) logStateChange() {
 	}
 
 	state := deriveState(snapshot, l.mode, l.activeVehicle)
+	prev := l.lastState
+	changed := state != prev
+	l.lastState = state
 
-	if state != l.lastState {
-		prev := l.lastState
-		l.lastState = state
-		l.mu.Unlock()
+	direction := "normal"
+	identification := ""
 
+	if vehicle := l.activeVehicle; vehicle != nil {
+		direction = vehicle.Direction
+		identification = vehicle.Plate
+		if identification == "" {
+			identification = vehicle.KeyCode
+		}
+	}
+
+	notifyState := state
+	if state == lanestatus.StateWaitingTransfer {
+		notifyState = lanestatus.StateWaitingTransfer1
+	}
+
+	update := access.ContextUpdate{
+		LaneID:         l.ID,
+		Direction:      direction,
+		State:          string(notifyState),
+		Identification: identification,
+	}
+
+	if update != l.lastContext {
+		select {
+		case l.notifyQueue <- update:
+			l.lastContext = update
+		default:
+			log.Printf(
+				"[lane %s] очередь уведомлений Laravel заполнена",
+				l.ID,
+			)
+		}
+	}
+
+	l.mu.Unlock()
+
+	if changed {
 		log.Printf(
 			"[lane %s] state %s -> %s",
 			l.ID, stateOrInitial(prev), state,
 		)
-		return
 	}
-
-	l.mu.Unlock()
 }
 
 func stateOrInitial(s lanestatus.State) lanestatus.State {
@@ -1172,8 +1157,7 @@ func (l *Lane) NextState() error {
 		return errors.New("next_state запрещён: результат PLC-команды неизвестен; проверьте PLC и выполните Reset")
 	}
 
-	validationValid := l.releaseMode != releaseModeExternalConfirmation ||
-		vehicle.validationCurrent()
+	validationValid := vehicle.validationCurrent()
 
 	done, err := l.Scenario.NextState(
 		validationValid,
@@ -1216,8 +1200,7 @@ func (l *Lane) PrevState() error {
 		return errors.New("prev_state запрещён: результат Start неизвестен; сначала проверить PLC и выполнить Reset")
 	}
 
-	validationValid := l.releaseMode != releaseModeExternalConfirmation ||
-		vehicle.validationCurrent()
+	validationValid := vehicle.validationCurrent()
 
 	err := l.Scenario.PrevState(
 		validationValid,
@@ -1473,4 +1456,39 @@ func (l *Lane) CachedIdentification() (
 		l.cachedKey,
 		l.cachedKeyAt,
 		direction
+}
+
+func (l *Lane) notifyContextLoop() {
+	defer close(l.notifyDone)
+
+	notifier, ok := l.decider.(interface {
+		NotifyContext(context.Context, access.ContextUpdate) error
+	})
+	if !ok {
+		log.Printf("[lane %s] Laravel context notifier недоступен", l.ID)
+		return
+	}
+
+	for {
+		select {
+		case <-l.stopPoller:
+			return
+
+		case update := <-l.notifyQueue:
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				10*time.Second,
+			)
+
+			err := notifier.NotifyContext(ctx, update)
+			cancel()
+
+			if err != nil {
+				log.Printf(
+					"[lane %s] ошибка отправки контекста Laravel: %v",
+					l.ID, err,
+				)
+			}
+		}
+	}
 }

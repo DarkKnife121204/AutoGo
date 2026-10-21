@@ -78,8 +78,6 @@ func Build(cfg config.Config) (*Runtime, error) {
 		return nil, err
 	}
 
-	decider := access.NewStubDecider()
-
 	siteLanes, barrierLane, triggerIndex, err := buildLanes(
 		cfg.Checkpoints,
 		cfg.Devices,

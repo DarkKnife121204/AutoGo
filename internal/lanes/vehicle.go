@@ -33,8 +33,8 @@ type VehicleContext struct {
 
 func (v *VehicleContext) validationCurrent() bool {
 	return v.Approved &&
-		v.PlateType != "" &&
-		v.PlateType != access.PlateTypeInvalid &&
+		(v.PlateType == access.PlateTypeRegular ||
+			v.PlateType == access.PlateTypeVIP) &&
 		!v.ValidatedAt.IsZero() &&
 		time.Since(v.ValidatedAt) <= validationCacheTimeout
 }

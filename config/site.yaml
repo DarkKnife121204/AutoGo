@@ -5,13 +5,17 @@ site:
   name: Площадка №1
 
 services:
-  - id: axxon-main
-    type: axxon
-    address: "AXXON_ADDRESS"
-    server: "AXXON_SERVER"
-    username: "USERNAME"
-    password: "PASSWORD"
-    timeout: 5s
+#  - id: axxon-main
+#    type: axxon
+#    address: ""
+#    server: ""
+#    username: ""
+#    password: ""
+#    timeout: 5s
+  - id: laravel-backend
+    type: laravel
+    address: ${LARAVEL_API_URL}
+    timeout: 8s
 
 controllers:
   - id: plc-1

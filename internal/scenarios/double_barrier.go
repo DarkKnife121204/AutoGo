@@ -619,6 +619,12 @@ func (d *DoubleBarrier) NextState(validationValid bool, vip bool) (bool, error) 
 		return false, nil
 
 	case gateConfirm:
+		if !validationValid {
+			return false, errors.New(
+				"next_state запрещён: разрешение Laravel отсутствует или истекло",
+			)
+		}
+
 		if err := d.waitReadyForStart(); err != nil {
 			return false, err
 		}
