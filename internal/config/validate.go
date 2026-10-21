@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	ServiceTypeAxxon = "axxon"
+	ServiceTypeAxxon   = "axxon"
+	ServiceTypeLaravel = "laravel"
 
 	ControllerTypeSiemens = "siemens"
 
@@ -768,6 +769,15 @@ func validateService(
 
 	switch strings.TrimSpace(service.Type) {
 	case ServiceTypeAxxon:
+		if strings.TrimSpace(service.Server) == "" {
+			validationErrors = append(
+				validationErrors,
+				fmt.Errorf("%s.server обязателен", path),
+			)
+		}
+
+	case ServiceTypeLaravel:
+
 	default:
 		validationErrors = append(
 			validationErrors,
@@ -782,30 +792,14 @@ func validateService(
 	if strings.TrimSpace(service.Address) == "" {
 		validationErrors = append(
 			validationErrors,
-			fmt.Errorf(
-				"%s.address обязателен",
-				path,
-			),
-		)
-	}
-
-	if strings.TrimSpace(service.Server) == "" {
-		validationErrors = append(
-			validationErrors,
-			fmt.Errorf(
-				"%s.server обязателен",
-				path,
-			),
+			fmt.Errorf("%s.address обязателен", path),
 		)
 	}
 
 	if service.Timeout <= 0 {
 		validationErrors = append(
 			validationErrors,
-			fmt.Errorf(
-				"%s.timeout должен быть больше 0",
-				path,
-			),
+			fmt.Errorf("%s.timeout должен быть больше 0", path),
 		)
 	}
 

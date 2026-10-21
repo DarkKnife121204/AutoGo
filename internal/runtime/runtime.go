@@ -8,6 +8,7 @@ import (
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanes"
 	"AutoGo/internal/plcclient"
+	"errors"
 )
 
 type Runtime struct {
@@ -24,6 +25,42 @@ type Runtime struct {
 }
 
 func Build(cfg config.Config) (*Runtime, error) {
+
+	var laravelService *config.ServiceConfig
+
+	for i := range cfg.Services {
+		if cfg.Services[i].Type != config.ServiceTypeLaravel {
+			continue
+		}
+
+		if laravelService != nil {
+			return nil, errors.New("настроено несколько Laravel-сервисов")
+		}
+
+		laravelService = &cfg.Services[i]
+	}
+
+	if laravelService == nil {
+		return nil, errors.New("Laravel-сервис не настроен")
+	}
+
+	gateNames := make(map[string]string)
+
+	for _, checkpoint := range cfg.Checkpoints {
+		for _, lane := range checkpoint.Lanes {
+			gateNames[lane.ID] = lane.GateName
+		}
+	}
+
+	decider, err := access.NewLaravelDecider(
+		laravelService.Address,
+		laravelService.Timeout,
+		gateNames,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	axxonServices, err := buildAxxonClients(cfg.Services)
 	if err != nil {
 		return nil, err
