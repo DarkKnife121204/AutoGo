@@ -1,4 +1,4 @@
-version: "1"
+version: 1
 
 site:
   id: site-1
@@ -22,10 +22,9 @@ services:
 
   - id: laravel-backend
     type: laravel
-    mode: stub # real | stub | disabled
-#     Для real нужны address и timeout:
-#    address: ${LARAVEL_API_URL}
-#    timeout: 8s
+    mode: real
+    address: ${LARAVEL_API_URL}
+    timeout: 8s
 
 controllers:
   - id: plc-1

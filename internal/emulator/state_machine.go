@@ -150,27 +150,24 @@ func (e *Emulator) stop() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.operationID++
-
-	var nextState plc.State
-
-	switch e.actualState {
-	case plc.ActualStateClosed:
-		nextState = plc.StateClosed
-
-	case plc.ActualStateOpened:
-		nextState = plc.StateOpened
-
+	switch e.state {
+	case plc.StateOpening, plc.StateOpened, plc.StateClosing:
 	default:
-		nextState = plc.StateInit
-	}
-
-	if err := e.setState(nextState); err != nil {
-		log.Printf("ошибка остановки: %v", err)
 		return
 	}
 
-	log.Println("PLC: операция остановлена")
+	e.operationID++
+
+	if err := e.setState(plc.StateClosed); err != nil {
+		log.Printf("ошибка остановки: %v", err)
+		return
+	}
+	if err := e.setActualState(plc.ActualStateClosed); err != nil {
+		log.Printf("ошибка установки закрытого состояния: %v", err)
+		return
+	}
+
+	log.Println("PLC: операция остановлена, состояние Waiting")
 }
 
 func (e *Emulator) reset() {
