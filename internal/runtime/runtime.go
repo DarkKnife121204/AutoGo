@@ -7,21 +7,22 @@ import (
 	"AutoGo/internal/config"
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanes"
+	"AutoGo/internal/onbon"
 	"AutoGo/internal/plcclient"
 	"errors"
 )
 
 type Runtime struct {
 	AxxonServices map[string]*axxon.Client
-
-	Controllers  map[string]*plcclient.Client
-	Barriers     map[string]*devices.Barrier
-	Lanes        map[string]*lanes.Lane
-	BarrierLane  map[string]*lanes.Lane
-	TriggerIndex map[string]lanes.TriggerTarget
-	Checkpoints  map[string]*checkpoints.Checkpoint
-	GateLanes    map[string]*lanes.Lane
-	GateBarriers map[string]map[string]*devices.Barrier
+	OnbonBoards   map[string]*onbon.Board
+	Controllers   map[string]*plcclient.Client
+	Barriers      map[string]*devices.Barrier
+	Lanes         map[string]*lanes.Lane
+	BarrierLane   map[string]*lanes.Lane
+	TriggerIndex  map[string]lanes.TriggerTarget
+	Checkpoints   map[string]*checkpoints.Checkpoint
+	GateLanes     map[string]*lanes.Lane
+	GateBarriers  map[string]map[string]*devices.Barrier
 }
 
 func Build(cfg config.Config) (*Runtime, error) {
@@ -88,15 +89,23 @@ func Build(cfg config.Config) (*Runtime, error) {
 		return nil, err
 	}
 
+	onbonBoards, err := buildOnbonBoards(cfg.Services)
+	if err != nil {
+		closePLCClients(controllers)
+		return nil, err
+	}
+
 	siteLanes, barrierLane, triggerIndex, err := buildLanes(
 		cfg.Checkpoints,
 		cfg.Devices,
 		barriers,
 		decider,
 		axxonServices,
+		onbonBoards,
 		cfg.Services,
 	)
 	if err != nil {
+		closeOnbonBoards(onbonBoards)
 		closePLCClients(controllers)
 
 		return nil, err
@@ -104,6 +113,7 @@ func Build(cfg config.Config) (*Runtime, error) {
 
 	siteCheckpoints, err := buildCheckpoints(cfg.Checkpoints, siteLanes)
 	if err != nil {
+		closeOnbonBoards(onbonBoards)
 		closePLCClients(controllers)
 
 		return nil, err
@@ -138,6 +148,7 @@ func Build(cfg config.Config) (*Runtime, error) {
 
 	return &Runtime{
 		AxxonServices: axxonServices,
+		OnbonBoards:   onbonBoards,
 		Controllers:   controllers,
 		Barriers:      barriers,
 		Lanes:         siteLanes,
@@ -162,5 +173,6 @@ func (r *Runtime) StopPollers() {
 }
 
 func (r *Runtime) Close() {
+	closeOnbonBoards(r.OnbonBoards)
 	closePLCClients(r.Controllers)
 }

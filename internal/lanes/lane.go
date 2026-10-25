@@ -1,6 +1,7 @@
 package lanes
 
 import (
+	"AutoGo/internal/onbon"
 	"context"
 	"errors"
 	"fmt"
@@ -35,11 +36,14 @@ type Lane struct {
 	CheckpointID string
 	Scenario     scenarios.Scenario
 
-	releaseMode string
-	decider     access.Decider
-	sources     []*devices.Source
-	services    map[string]*axxon.Client
-	video       *video.Recorder
+	releaseMode    string
+	decider        access.Decider
+	sources        []*devices.Source
+	services       map[string]*axxon.Client
+	video          *video.Recorder
+	displayNormal  *onbon.Display
+	displayReverse *onbon.Display
+	boardDirection string
 
 	mu                    sync.Mutex
 	mode                  Mode
@@ -123,6 +127,150 @@ func New(
 
 func (l *Lane) SetVideoRecorder(recorder *video.Recorder) {
 	l.video = recorder
+}
+
+func (l *Lane) SetInfoBoards(
+	normal *onbon.Display,
+	reverse *onbon.Display,
+) {
+	l.displayNormal = normal
+	l.displayReverse = reverse
+}
+
+func (l *Lane) clearDisplaysLocked() {
+	if l.displayNormal != nil {
+		l.displayNormal.Clear()
+	}
+
+	if l.displayReverse != nil {
+		l.displayReverse.Clear()
+	}
+}
+
+func (l *Lane) showPlateLocked(plate, plateType string) {
+	if plate == "" {
+		return
+	}
+
+	if !l.BidirectionalMode {
+		if l.displayNormal != nil {
+			l.displayNormal.ShowPlate(plate, plateType)
+		}
+		return
+	}
+
+	if l.boardDirection == "reverse" {
+		if l.displayNormal != nil {
+			l.displayNormal.ShowMessage(onbon.MessageBusy)
+		}
+		if l.displayReverse != nil {
+			l.displayReverse.ShowPlate(plate, plateType)
+		}
+		return
+	}
+
+	if l.displayNormal != nil {
+		l.displayNormal.ShowPlate(plate, plateType)
+	}
+
+	if l.displayReverse != nil {
+		l.displayReverse.ShowMessage(onbon.MessageBusy)
+	}
+}
+
+func (l *Lane) showMessageLocked(message onbon.MessageType) {
+	if !l.BidirectionalMode {
+		if l.displayNormal != nil {
+			l.displayNormal.ShowMessage(message)
+		}
+		return
+	}
+
+	switch l.boardDirection {
+	case "reverse":
+		if l.displayNormal != nil {
+			l.displayNormal.ShowMessage(onbon.MessageBusy)
+		}
+		if l.displayReverse != nil {
+			l.displayReverse.ShowMessage(message)
+		}
+
+	case "normal":
+		if l.displayNormal != nil {
+			l.displayNormal.ShowMessage(message)
+		}
+		if l.displayReverse != nil {
+			l.displayReverse.ShowMessage(onbon.MessageBusy)
+		}
+
+	default:
+		if l.displayNormal != nil {
+			l.displayNormal.ShowMessage(message)
+		}
+		if l.displayReverse != nil {
+			l.displayReverse.ShowMessage(message)
+		}
+	}
+}
+
+func (l *Lane) updateBoardsLocked(
+	snapshot lanestatus.Snapshot,
+	state lanestatus.State,
+	prev lanestatus.State,
+	changed bool,
+	plcChanged bool,
+) {
+	if changed {
+		switch state {
+		case lanestatus.StateAlarm:
+			l.showMessageLocked(onbon.MessageError)
+			return
+
+		case lanestatus.StateNotReady:
+			l.showMessageLocked(onbon.MessageNotReady)
+			return
+
+		case lanestatus.StateRollingBack:
+			l.showMessageLocked(onbon.MessageGiveWay)
+			return
+
+		case lanestatus.StateConfirm,
+			lanestatus.StateWaitingTransfer2:
+			l.showMessageLocked(onbon.MessageBusy)
+			return
+
+		case lanestatus.StateIdentEntrance:
+			if prev != "" {
+				l.showMessageLocked(onbon.MessageStop)
+			}
+			return
+		}
+	}
+
+	if !changed && !plcChanged {
+		return
+	}
+
+	switch state {
+	case lanestatus.StateWaitingTransfer1,
+		lanestatus.StateWaitingTransfer:
+
+		switch snapshot.Phase {
+		case lanestatus.PhaseOpening:
+			l.showMessageLocked(onbon.MessageWait)
+
+		case lanestatus.PhaseOpened:
+			l.showMessageLocked(onbon.MessageGranted)
+
+		case lanestatus.PhaseClosing:
+			l.showMessageLocked(onbon.MessageBusy)
+		}
+
+	case lanestatus.StateRollingBack:
+		if snapshot.Phase == lanestatus.PhaseClosing {
+			l.showMessageLocked(onbon.MessageBusy)
+		}
+	}
 }
 
 func (l *Lane) VideoStatus() (bool, time.Time, time.Time) {
@@ -265,6 +413,8 @@ func (l *Lane) Reset() error {
 
 	if state == lanestatus.StateIdentEntrance {
 		l.activeVehicle = nil
+		l.boardDirection = ""
+		l.clearDisplaysLocked()
 		l.logStateChangeLocked()
 		l.mu.Unlock()
 		return nil
@@ -305,6 +455,8 @@ func (l *Lane) Reset() error {
 	}
 
 	l.activeVehicle = nil
+	l.boardDirection = ""
+	l.clearDisplaysLocked()
 	l.logStateChangeLocked()
 	l.mu.Unlock()
 
@@ -419,6 +571,14 @@ func (l *Lane) trigger(
 		l.activeVehicle = vehicle
 		l.photoVehicleID = vehicle.ID
 		l.photoCaptureInProgress = false
+
+		l.boardDirection = direction
+		l.clearDisplaysLocked()
+
+		if plate != "" {
+			l.showPlateLocked(plate, "Unknown")
+		}
+
 		l.mu.Unlock()
 
 		l.startPhotoCapture(vehicle)
@@ -652,6 +812,13 @@ func (l *Lane) takeQueueHeadLocked() *VehicleContext {
 	head.Waiting = true
 	l.activeVehicle = head
 
+	l.boardDirection = head.Direction
+	l.clearDisplaysLocked()
+
+	if head.Plate != "" {
+		l.showPlateLocked(head.Plate, string(head.PlateType))
+	}
+
 	return head
 }
 
@@ -714,7 +881,9 @@ func (l *Lane) decideAsync(vehicle *VehicleContext) {
 		l.mu.Lock()
 
 		if l.activeVehicle == vehicle && vehicle.Waiting {
+			l.showMessageLocked(onbon.MessageError)
 			l.activeVehicle = nil
+			l.boardDirection = ""
 		}
 
 		l.mu.Unlock()
@@ -753,7 +922,9 @@ func (l *Lane) applyDecision(vehicle *VehicleContext, decision access.Decision) 
 	l.cachedValidationAt = time.Now()
 
 	if !allowed {
+		l.showMessageLocked(onbon.MessageDenied)
 		l.activeVehicle = nil
+		l.boardDirection = ""
 		l.mu.Unlock()
 		return
 	}
@@ -761,6 +932,10 @@ func (l *Lane) applyDecision(vehicle *VehicleContext, decision access.Decision) 
 	vehicle.Approved = true
 	vehicle.PlateType = decision.PlateType
 	vehicle.ValidatedAt = time.Now()
+
+	if vehicle.Plate != "" {
+		l.showPlateLocked(vehicle.Plate, string(vehicle.PlateType))
+	}
 
 	l.mu.Unlock()
 
@@ -771,6 +946,7 @@ func (l *Lane) applyDecision(vehicle *VehicleContext, decision access.Decision) 
 func (l *Lane) clearVehicleLocked(vehicle *VehicleContext) {
 	if l.activeVehicle == vehicle {
 		l.activeVehicle = nil
+		l.boardDirection = ""
 		log.Printf("[lane %s] passage finished: value=%s", l.ID, vehicle.identity())
 	}
 }
@@ -990,6 +1166,12 @@ func (l *Lane) poll() {
 						l.activeVehicle = cached
 						l.photoVehicleID = cached.ID
 						l.photoCaptureInProgress = false
+						l.boardDirection = cached.Direction
+						l.clearDisplaysLocked()
+
+						if cached.Plate != "" {
+							l.showPlateLocked(cached.Plate, string(cached.PlateType))
+						}
 						l.mu.Unlock()
 						l.startPhotoCapture(cached)
 						go l.decideAsync(cached)
@@ -1109,6 +1291,16 @@ func (l *Lane) logStateChangeLocked() {
 				l.video.StartSequence()
 			}
 		}
+	}
+
+	if changed || plcChanged {
+		l.updateBoardsLocked(
+			snapshot,
+			state,
+			prev,
+			changed,
+			plcChanged,
+		)
 	}
 
 	if !changed && !plcChanged {

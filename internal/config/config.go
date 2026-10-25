@@ -17,19 +17,29 @@ type SiteConfig struct {
 }
 
 type ServiceConfig struct {
-	ID              string        `yaml:"id"`
-	Type            string        `yaml:"type"`
-	Mode            string        `yaml:"mode"`
-	PhotoFile       string        `yaml:"photo_file"`
-	VideoFile       string        `yaml:"video_file"`
-	VideoAddress    string        `yaml:"video_address"`
-	VideoStartDelay time.Duration `yaml:"video_start_delay"`
-	VideoDuration   time.Duration `yaml:"video_duration"`
-	Address         string        `yaml:"address"`
-	Server          string        `yaml:"server"`
-	Username        string        `yaml:"username"`
-	Password        string        `yaml:"password"`
-	Timeout         time.Duration `yaml:"timeout"`
+	ID              string            `yaml:"id"`
+	Type            string            `yaml:"type"`
+	Mode            string            `yaml:"mode"`
+	PhotoFile       string            `yaml:"photo_file"`
+	VideoFile       string            `yaml:"video_file"`
+	VideoAddress    string            `yaml:"video_address"`
+	VideoStartDelay time.Duration     `yaml:"video_start_delay"`
+	VideoDuration   time.Duration     `yaml:"video_duration"`
+	Address         string            `yaml:"address"`
+	Server          string            `yaml:"server"`
+	Username        string            `yaml:"username"`
+	Password        string            `yaml:"password"`
+	Timeout         time.Duration     `yaml:"timeout"`
+	Areas           []OnbonAreaConfig `yaml:"areas"`
+}
+
+type OnbonAreaConfig struct {
+	ID       int `yaml:"id"`
+	X        int `yaml:"x"`
+	Y        int `yaml:"y"`
+	Width    int `yaml:"width"`
+	Height   int `yaml:"height"`
+	FontSize int `yaml:"font_size"`
 }
 
 type ControllerConfig struct {
@@ -48,6 +58,8 @@ type DeviceConfig struct {
 	ExternalID string `yaml:"external_id"`
 	Service    string `yaml:"service"`
 	Direction  string `yaml:"direction"`
+	PlateArea  int    `yaml:"plate_area"`
+	InfoArea   int    `yaml:"info_area"`
 }
 
 type CheckpointConfig struct {

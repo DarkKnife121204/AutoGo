@@ -26,6 +26,14 @@ services:
     address: ${LARAVEL_API_URL}
     timeout: 8s
 
+  - id: onbon-main
+    type: onbon
+    mode: disabled
+
+  - id: onbon-reverse
+    type: onbon
+    mode: disabled
+
 controllers:
   - id: plc-1
     type: siemens
@@ -86,6 +94,22 @@ devices:
     direction: reverse
     service: axxon-main
 
+  - id: display-normal
+    name: Табло въезда шлюза
+    type: display
+    service: onbon-main
+    direction: normal
+    plate_area: 0
+    info_area: 1
+
+  - id: display-reverse
+    name: Табло выезда шлюза
+    type: display
+    service: onbon-reverse
+    direction: reverse
+    plate_area: 0
+    info_area: 1
+
 checkpoints:
   - id: checkpoint-1
     name: КПП №1
@@ -118,6 +142,8 @@ checkpoints:
           - barrier-3
           - cam-2
           - cam-3
+          - display-normal
+          - display-reverse
         scenario:
           type: double_barrier
           settings:

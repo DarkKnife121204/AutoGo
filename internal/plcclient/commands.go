@@ -3,6 +3,7 @@ package plcclient
 import (
 	"AutoGo/internal/plc"
 	"fmt"
+	"log"
 )
 
 func (c *Client) Start() error {
@@ -40,6 +41,7 @@ func (c *Client) sendCommand(command plc.Command) error {
 		plc.RegisterInCommand,
 		registers[:],
 	); err != nil {
+		log.Printf("[plc %s] команда %s: ошибка записи: %v", c.config.Address, command, err)
 		return fmt.Errorf(
 			"отправка PLC-команды %s: %w",
 			command,
@@ -47,5 +49,6 @@ func (c *Client) sendCommand(command plc.Command) error {
 		)
 	}
 
+	log.Printf("[plc %s] команда %s: запись в HR%d подтверждена", c.config.Address, command, plc.RegisterInCommand)
 	return nil
 }

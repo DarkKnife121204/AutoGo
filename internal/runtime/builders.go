@@ -7,6 +7,7 @@ import (
 	"AutoGo/internal/config"
 	"AutoGo/internal/devices"
 	"AutoGo/internal/lanes"
+	"AutoGo/internal/onbon"
 	"AutoGo/internal/plcclient"
 	"AutoGo/internal/scenarios"
 	"AutoGo/internal/video"
@@ -115,6 +116,7 @@ func buildLanes(
 	barriers map[string]*devices.Barrier,
 	decider access.Decider,
 	axxonServices map[string]*axxon.Client,
+	onbonBoards map[string]*onbon.Board,
 	serviceConfigs []config.ServiceConfig,
 ) (
 	map[string]*lanes.Lane,
@@ -175,6 +177,15 @@ func buildLanes(
 					laneConfig.BidirectionalMode,
 				)
 				if err != nil {
+					return nil, nil, nil, err
+				}
+
+				if err := bindOnbonDisplays(
+					lane,
+					laneConfig,
+					deviceByID,
+					onbonBoards,
+				); err != nil {
 					return nil, nil, nil, err
 				}
 
@@ -255,6 +266,15 @@ func buildLanes(
 					laneConfig.BidirectionalMode,
 				)
 				if err != nil {
+					return nil, nil, nil, err
+				}
+
+				if err := bindOnbonDisplays(
+					lane,
+					laneConfig,
+					deviceByID,
+					onbonBoards,
+				); err != nil {
 					return nil, nil, nil, err
 				}
 
@@ -476,5 +496,119 @@ func bindVideoRecorder(lane *lanes.Lane, cfg config.LaneConfig, clients map[stri
 		return fmt.Errorf("линия %q: создание видеорекордера: %w", cfg.ID, err)
 	}
 	lane.SetVideoRecorder(recorder)
+	return nil
+}
+
+func buildOnbonBoards(
+	services []config.ServiceConfig,
+) (map[string]*onbon.Board, error) {
+	boards := make(map[string]*onbon.Board)
+
+	for _, service := range services {
+		if service.Type != config.ServiceTypeOnbon {
+			continue
+		}
+
+		if service.Mode == config.ServiceModeDisabled {
+			log.Printf("[onbon %s] отключён", service.ID)
+			continue
+		}
+
+		client, err := onbon.NewClient(service)
+		if err != nil {
+			closeOnbonBoards(boards)
+			return nil, fmt.Errorf(
+				"создание Onbon %q: %w", service.ID, err,
+			)
+		}
+
+		board, err := onbon.NewBoard(service.ID, client)
+		if err != nil {
+			closeOnbonBoards(boards)
+			return nil, err
+		}
+
+		boards[service.ID] = board
+	}
+
+	return boards, nil
+}
+
+func closeOnbonBoards(boards map[string]*onbon.Board) {
+	for _, board := range boards {
+		board.Close()
+	}
+}
+
+func bindOnbonDisplays(
+	lane *lanes.Lane,
+	cfg config.LaneConfig,
+	devices map[string]config.DeviceConfig,
+	boards map[string]*onbon.Board,
+) error {
+	var normal, reverse *onbon.Display
+	var seenNormal, seenReverse bool
+
+	for _, id := range cfg.Devices {
+		device := devices[id]
+
+		if device.Type != config.DeviceTypeDisplay {
+			continue
+		}
+
+		direction := device.Direction
+		if direction == "" {
+			direction = config.DirectionNormal
+		}
+
+		switch direction {
+		case config.DirectionNormal:
+			if seenNormal {
+				return fmt.Errorf(
+					"линия %s: несколько основных табло", cfg.ID,
+				)
+			}
+			seenNormal = true
+
+		case config.DirectionReverse:
+			if seenReverse {
+				return fmt.Errorf(
+					"линия %s: несколько обратных табло", cfg.ID,
+				)
+			}
+			seenReverse = true
+
+		default:
+			return fmt.Errorf(
+				"линия %s: неизвестное направление табло %q",
+				cfg.ID, direction,
+			)
+		}
+
+		board := boards[device.Service]
+
+		if board == nil {
+			continue
+		}
+
+		display, err := onbon.NewDisplay(
+			board,
+			device.PlateArea,
+			device.InfoArea,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"табло %s: %w", device.ID, err,
+			)
+		}
+
+		if direction == config.DirectionReverse {
+			reverse = display
+		} else {
+			normal = display
+		}
+	}
+
+	lane.SetInfoBoards(normal, reverse)
 	return nil
 }

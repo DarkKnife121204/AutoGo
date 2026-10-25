@@ -10,6 +10,7 @@ import (
 const (
 	ServiceTypeAxxon   = "axxon"
 	ServiceTypeLaravel = "laravel"
+	ServiceTypeOnbon   = "onbon"
 
 	ServiceModeReal     = "real"
 	ServiceModeStub     = "stub"
@@ -410,7 +411,7 @@ func validateDevice(
 		}
 	}
 
-	if device.Type == DeviceTypeCamera {
+	if device.Type == DeviceTypeCamera || device.Type == DeviceTypeDisplay {
 		serviceID := strings.TrimSpace(device.Service)
 
 		if serviceID == "" {
@@ -430,14 +431,20 @@ func validateDevice(
 					serviceID,
 				),
 			)
-		} else if serviceTypes[serviceID] != ServiceTypeAxxon {
-			validationErrors = append(
-				validationErrors,
-				fmt.Errorf(
-					"%s.service камеры должен ссылаться на сервис типа axxon",
-					path,
-				),
-			)
+		} else {
+			expectedType := ServiceTypeAxxon
+
+			if device.Type == DeviceTypeDisplay {
+				expectedType = ServiceTypeOnbon
+			}
+
+			if serviceTypes[serviceID] != expectedType {
+				validationErrors = append(validationErrors,
+					fmt.Errorf(
+						"%s.service должен ссылаться на сервис типа %s",
+						path, expectedType,
+					))
+			}
 		}
 	} else if strings.TrimSpace(device.Service) != "" {
 		validationErrors = append(
@@ -447,6 +454,25 @@ func validateDevice(
 				path,
 			),
 		)
+	}
+
+	if device.Type == DeviceTypeDisplay {
+		switch strings.TrimSpace(device.Direction) {
+		case "", DirectionNormal, DirectionReverse:
+		default:
+			validationErrors = append(validationErrors,
+				fmt.Errorf("%s: неизвестное направление табло", path))
+		}
+
+		if device.Controller != "" {
+			validationErrors = append(validationErrors,
+				fmt.Errorf("%s: controller недопустим для display", path))
+		}
+
+		if device.PlateArea == device.InfoArea {
+			validationErrors = append(validationErrors,
+				fmt.Errorf("%s: plate_area и info_area должны отличаться", path))
+		}
 	}
 
 	return errors.Join(validationErrors...)
@@ -778,7 +804,7 @@ func validateService(path string, service ServiceConfig) error {
 	var validationErrors []error
 
 	switch strings.TrimSpace(service.Type) {
-	case ServiceTypeAxxon, ServiceTypeLaravel:
+	case ServiceTypeAxxon, ServiceTypeLaravel, ServiceTypeOnbon:
 	default:
 		validationErrors = append(validationErrors,
 			fmt.Errorf("%s.type содержит неизвестный тип %q", path, service.Type))
@@ -815,6 +841,33 @@ func validateService(path string, service ServiceConfig) error {
 	default:
 		validationErrors = append(validationErrors,
 			fmt.Errorf("%s.mode содержит неизвестный режим %q (real, stub, disabled)", path, service.Mode))
+	}
+
+	if service.Type == ServiceTypeOnbon {
+		if mode == ServiceModeStub {
+			validationErrors = append(validationErrors,
+				fmt.Errorf("%s: stub для Onbon пока не поддерживается", path))
+		}
+
+		if mode == "" || mode == ServiceModeReal {
+			if service.Username == "" || service.Password == "" {
+				validationErrors = append(validationErrors,
+					fmt.Errorf("%s: Onbon требует username и password", path))
+			}
+
+			if len(service.Areas) == 0 {
+				validationErrors = append(validationErrors,
+					fmt.Errorf("%s: Onbon требует хотя бы одну область экрана", path))
+			}
+
+			for _, area := range service.Areas {
+				if area.ID < 0 || area.X < 0 || area.Y < 0 ||
+					area.Width <= 0 || area.Height <= 0 || area.FontSize <= 0 {
+					validationErrors = append(validationErrors,
+						fmt.Errorf("%s: некорректная область Onbon %d", path, area.ID))
+				}
+			}
+		}
 	}
 
 	return errors.Join(validationErrors...)
